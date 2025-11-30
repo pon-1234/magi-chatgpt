@@ -30,11 +30,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function handleSendPrompt({ prompt, timeout = DEFAULT_RESPONSE_TIMEOUT }) {
   const composer = await waitForComposer();
   const knownIds = collectAssistantIds();
-
   await focusComposer(composer);
   await fillComposer(composer, prompt);
   await triggerSend(composer);
-
   const response = await waitForNewAssistantResponse(knownIds, timeout);
   return response;
 }
@@ -50,11 +48,16 @@ async function waitForComposer(timeout = COMPOSER_WAIT_TIMEOUT) {
     }
     await delay(500);
   }
-  throw new Error("入力欄を検出できませんでした。ChatGPTにログイン済みか確認してください。");
+  throw new Error(
+    "入力欄を検出できませんでした。ChatGPTにログイン済みか、ページ構造の変更がないか確認してください。"
+  );
 }
 
 function isComposer(element) {
   if (!element) return false;
+  if (element.offsetParent === null && element !== document.activeElement) {
+    return false;
+  }
   if (element.tagName === "TEXTAREA" || element.tagName === "INPUT") {
     return !element.disabled;
   }
@@ -72,9 +75,7 @@ async function focusComposer(element) {
 async function fillComposer(element, text) {
   if (element.tagName === "TEXTAREA" || element.tagName === "INPUT") {
     element.value = text;
-    element.dispatchEvent(
-      new InputEvent("input", { bubbles: true, data: text })
-    );
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, data: text }));
   } else if (element.isContentEditable) {
     element.textContent = text;
     const selection = window.getSelection();
@@ -83,9 +84,7 @@ async function fillComposer(element, text) {
     range.collapse(false);
     selection.removeAllRanges();
     selection.addRange(range);
-    element.dispatchEvent(
-      new InputEvent("input", { bubbles: true, data: text })
-    );
+    element.dispatchEvent(new InputEvent("input", { bubbles: true, data: text }));
   } else {
     throw new Error("入力欄への書き込みに失敗しました。");
   }
@@ -97,7 +96,6 @@ async function triggerSend(element) {
   const sendButton =
     document.querySelector('button[data-testid="send-button"]') ||
     form?.querySelector('button[type="submit"]');
-
   if (sendButton) {
     sendButton.removeAttribute("disabled");
     sendButton.click();
@@ -126,9 +124,9 @@ async function triggerSend(element) {
 
 function collectAssistantIds() {
   return new Set(
-    Array.from(
-      document.querySelectorAll('[data-message-author-role="assistant"]')
-    ).map((node, index) => getMessageId(node, index))
+    Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).map(
+      (node, index) => getMessageId(node, index)
+    )
   );
 }
 
@@ -141,15 +139,12 @@ function getMessageId(node, index = 0) {
   );
 }
 
-async function waitForNewAssistantResponse(
-  knownIds,
-  timeout = DEFAULT_RESPONSE_TIMEOUT
-) {
+async function waitForNewAssistantResponse(knownIds, timeout = DEFAULT_RESPONSE_TIMEOUT) {
   const start = Date.now();
-
   return new Promise((resolve, reject) => {
     let observer;
     let intervalId;
+    let lastMessage = null;
 
     const cleanup = () => {
       observer?.disconnect();
@@ -158,7 +153,34 @@ async function waitForNewAssistantResponse(
       }
     };
 
+    const isGenerating = () => {
+      return Boolean(
+        document.querySelector('button[data-testid="stop-button"]') ||
+          document.querySelector('button[aria-label*="Stop generating"]')
+      );
+    };
+
+    const finalizeIfStable = () => {
+      if (!lastMessage) return;
+      if (isGenerating()) return;
+      const stableFor = Date.now() - lastMessage.changedAt;
+      if (stableFor < 500) return;
+      knownIds.add(lastMessage.id);
+      cleanup();
+      resolve({
+        text: lastMessage.text,
+        html: lastMessage.html,
+        id: lastMessage.id,
+      });
+    };
+
     const checkForResponse = () => {
+      if (Date.now() - start > timeout) {
+        cleanup();
+        reject(new Error("ChatGPTの応答待ちがタイムアウトしました。"));
+        return;
+      }
+
       const nodes = Array.from(
         document.querySelectorAll('[data-message-author-role="assistant"]')
       );
@@ -171,22 +193,24 @@ async function waitForNewAssistantResponse(
         }
 
         const text = node.innerText?.trim();
-        if (text) {
-          knownIds.add(id);
-          cleanup();
-          resolve({
-            text,
-            html: node.innerHTML,
-            id,
-          });
-          return;
+        if (!text) {
+          continue;
         }
+
+        const html = node.innerHTML;
+        if (!lastMessage || lastMessage.id !== id || lastMessage.text !== text) {
+          lastMessage = {
+            id,
+            text,
+            html,
+            node,
+            changedAt: Date.now(),
+          };
+        }
+        break;
       }
 
-      if (Date.now() - start > timeout) {
-        cleanup();
-        reject(new Error("ChatGPTの応答待ちがタイムアウトしました。"));
-      }
+      finalizeIfStable();
     };
 
     observer = new MutationObserver(() => checkForResponse());
@@ -201,4 +225,3 @@ async function waitForNewAssistantResponse(
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
-

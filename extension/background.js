@@ -4,52 +4,38 @@ const CHATGPT_URL = "https://chatgpt.com/";
 const RESPONSE_TIMEOUT_MS = 600_000;
 const TAB_LOAD_TIMEOUT_MS = 60_000;
 const CONTENT_READY_TIMEOUT_MS = 60_000;
-const MAX_LOG_ENTRIES = 1_000;
-const CORE_AGENT_NAMES = new Set(["MELCHIOR", "BALTHASAR", "CASPER"]);
-const ANALYST_NAME = "ANALYST";
-const JUDGE_NAME = "JUDGE";
-const INITIALIZATION_ACTIVE_DURATION_MS = 2_500;
+const MAX_LOG_ENTRIES = 500;
 
-const DEFAULT_AGENTS = [
+const AGENTS = [
   {
     name: "MELCHIOR",
     role: "楽観的・可能性重視の視点",
     systemPrompt:
       "あなたはMELCHIORです。物事の良い面、可能性、チャンスに焦点を当てて議論してください。建設的で前向きな視点を提供します。",
-    roundInstruction:
-      "常に具体的な『新しいチャンス』『実現するためのステップ』『期待されるインパクト』を最低3点提示してください。",
   },
   {
     name: "BALTHASAR",
     role: "慎重・リスク重視の視点",
     systemPrompt:
       "あなたはBALTHASARです。リスク、問題点、懸念事項に焦点を当てて議論してください。批判的思考で潜在的な問題を指摘します。",
-    roundInstruction:
-      "必ず『リスク内容』『発生確率（低/中/高）』『影響度（低/中/高）』『回避・緩和策』の4項目で箇条書きにしてください。",
   },
   {
     name: "CASPER",
     role: "中立・技術的視点",
     systemPrompt:
       "あなたはCASPERです。感情を排し、データと論理に基づいて客観的に分析してください。技術的・実務的な観点を重視します。",
-    roundInstruction:
-      "事実・データ・実績の引用を意識し、『前提』『分析』『示唆』の3段構成で答えてください。必要に応じて数値例を挙げてください。",
   },
   {
     name: "ANALYST",
     role: "統合・分析担当",
     systemPrompt:
       "あなたはANALYSTです。他の議論参加者の意見を統合し、共通点と相違点を整理してください。議論の構造化を担当します。",
-    roundInstruction:
-      "各エージェントの主張を比較し、①合意点 ②相違点 ③次ラウンドで深掘りすべき論点 を箇条書きで要約してください。",
   },
   {
     name: "JUDGE",
     role: "最終判断・結論担当",
     systemPrompt:
       "あなたはJUDGEです。全ての議論を踏まえて、バランスの取れた最終的な結論や提案を導き出してください。",
-    roundInstruction:
-      "Markdown形式で [主要な論点 / 合意された点 / 意見が分かれた点 / 推奨する結論・次のアクション] の4セクションを構成してください。",
   },
 ];
 
@@ -57,215 +43,203 @@ const state = {
   running: false,
   topic: "",
   plannedRounds: 3,
-  agentConfigs: DEFAULT_AGENTS,
   agentTabs: [],
   logs: [],
   roundLogs: [],
   summary: "",
 };
 
+let keepAliveIntervalId = null;
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "START_DISCUSSION") {
     const topic = (message.topic || "").trim();
     const rounds = Number(message.rounds) || 3;
-    startDiscussion(topic, rounds)
-      .then((result) => sendResponse({ status: "ok", result }))
-      .catch((error) =>
-        sendResponse({ status: "error", message: error.message })
-      );
-    return true;
+
+    if (!topic) {
+      sendResponse({ status: "error", message: "議題を入力してください。" });
+      return;
+    }
+
+    if (state.running) {
+      sendResponse({
+        status: "error",
+        message: "別の議論が進行中です。完了を待ってから再実行してください。",
+      });
+      return;
+    }
+
+    sendResponse({ status: "ok" });
+
+    startDiscussion(topic, rounds).catch((error) => {
+      pushLog(`エラー: ${error.message}`);
+      notify({ type: "DISCUSSION_ERROR", message: error.message });
+    });
+    return;
   }
 
   if (message?.type === "GET_STATE") {
     sendResponse({
       status: "ok",
-      state: {
-        running: state.running,
-        topic: state.topic,
-        plannedRounds: state.plannedRounds,
-        logs: state.logs,
-        roundLogs: state.roundLogs,
-        summary: state.summary,
-        agents: state.agentTabs.map(({ name, tabId }) => ({ name, tabId })),
-      },
+      state: getPublicState(),
     });
-    return false;
+    return;
   }
 
   if (message?.type === "STOP_DISCUSSION") {
-    const wasRunning = state.running;
-    state.running = false;
-    if (wasRunning) {
-      pushLog("ユーザー操作により議論を停止しました。");
-      notifyState();
+    if (!state.running) {
+      sendResponse({ status: "ok" });
+      return;
     }
-    sendResponse({ status: "ok", wasRunning });
-    return false;
-  }
 
-  return false;
+    state.running = false;
+    pushLog("ユーザーから議論停止要求を受信しました。現在のラウンド終了後に停止します。");
+    notifyState();
+    sendResponse({ status: "ok" });
+    return;
+  }
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   const index = state.agentTabs.findIndex((tab) => tab.tabId === tabId);
   if (index >= 0) {
+    const removed = state.agentTabs[index];
     state.agentTabs.splice(index, 1);
-    pushLog(`タブ ${tabId} が閉じられました。再初期化が必要です。`);
-    notify({ type: "AGENT_TAB_CLOSED", tabId });
+    pushLog(`【${removed.name}】 のタブ (${tabId}) が閉じられました。必要であれば議論を再実行してください。`);
+    notify({ type: "AGENT_TAB_CLOSED", tabId, agentName: removed.name });
+    notifyState();
   }
 });
 
-async function startDiscussion(topic, rounds) {
-  if (!topic) {
-    throw new Error("議題を入力してください。");
-  }
-  if (state.running) {
-    throw new Error("別の議論が進行中です。完了を待ってから再実行してください。");
-  }
+function startKeepAlive() {
+  if (keepAliveIntervalId != null) return;
+  keepAliveIntervalId = setInterval(() => {
+    chrome.runtime.getPlatformInfo(() => {
+      const err = chrome.runtime.lastError;
+      if (
+        err &&
+        !err.message.includes("Extension context invalidated") &&
+        !err.message.includes("The message port closed before a response was received")
+      ) {
+        console.warn("MAGI keepAlive error:", err);
+      }
+    });
+  }, 20_000);
+}
 
-  state.agentConfigs = await loadAgents();
+function stopKeepAlive() {
+  if (keepAliveIntervalId != null) {
+    clearInterval(keepAliveIntervalId);
+    keepAliveIntervalId = null;
+  }
+}
+async function startDiscussion(topic, rounds) {
   state.running = true;
   state.topic = topic;
   state.plannedRounds = rounds;
   state.roundLogs = [];
   state.summary = "";
   state.logs = [];
+  pushLog(`議論を開始します: 「${topic}」 (ラウンド数: ${rounds})`);
   notifyState();
+  startKeepAlive();
 
   try {
     pushLog("エージェント用タブを準備しています…");
     await prepareAgentTabs();
+    if (!state.running) {
+      pushLog("議論が停止されました（タブ準備後）。");
+      return;
+    }
 
     pushLog("各エージェントの役割を初期化しています…");
     await initializeAgents();
-
-    pushLog(`議論を開始します（ラウンド数: ${rounds}）。`);
-    await executeRounds(rounds, topic);
-
     if (!state.running) {
-      pushLog("議論は途中で停止されました。最終まとめはスキップされます。");
-      return { summary: state.summary, rounds: state.roundLogs };
+      pushLog("議論が停止されました（初期化後）。");
+      return;
     }
 
-    pushLog("JUDGEによる最終まとめを依頼しています…");
+    pushLog(`議論ラウンドを実行します（${rounds} ラウンド予定）。`);
+    await executeRounds(rounds, topic);
+    if (!state.running) {
+      pushLog("議論はユーザーにより停止されました。最終まとめは生成しません。");
+      return;
+    }
+
+    pushLog("JUDGE による最終まとめを依頼しています…");
     const summary = await requestFinalSummary(topic);
     state.summary = summary;
-
     notify({
       type: "DISCUSSION_COMPLETE",
       summary,
       rounds: state.roundLogs,
     });
     pushLog("議論が完了しました。");
-
-    return { summary, rounds: state.roundLogs };
-  } catch (error) {
-    pushLog(`エラー: ${error.message}`);
-    notify({ type: "DISCUSSION_ERROR", message: error.message });
-    throw error;
   } finally {
     state.running = false;
+    stopKeepAlive();
     notifyState();
   }
-}
-
-async function loadAgents() {
-  return DEFAULT_AGENTS;
 }
 
 async function prepareAgentTabs() {
   await Promise.all(state.agentTabs.map((agent) => safeRemoveTab(agent.tabId)));
   state.agentTabs = [];
 
-  for (const [index, agent] of state.agentConfigs.entries()) {
-    const tab = await createTab({ url: CHATGPT_URL, active: index === 0 });
-    await disableAutoDiscard(tab.id);
+  for (const agent of AGENTS) {
+    if (!state.running) return;
+    const tab = await createTab({ url: CHATGPT_URL, active: false });
     await waitForTabComplete(tab.id);
     await ensureContentReady(tab.id);
     state.agentTabs.push({ ...agent, tabId: tab.id });
-    if (index === 0) {
-      await prepareChromeCall(chrome.tabs.update, tab.id, { active: false });
-    }
-    pushLog(`[${agent.name}] タブ準備完了 (tabId: ${tab.id})`);
+    pushLog(`【${agent.name}】 タブ準備完了 (tabId: ${tab.id})`);
   }
 }
 
 async function initializeAgents() {
-  for (const [index, agent] of state.agentTabs.entries()) {
-    await ensureTabVisible(agent.tabId, index === 0);
-
-    const prompt = buildInitializationPrompt(agent);
-    const response = await sendPromptToAgent(agent, prompt);
-    const text = response.text || "";
-    if (text.includes(`${agent.name}、準備完了`)) {
-      pushLog(`[${agent.name}] 初期化完了`);
-    } else {
-      pushLog(`[${agent.name}] 初期化確認: 想定外の応答 -> ${truncate(text)}`);
-    }
-
-    if (state.running) {
-      await prepareChromeCall(chrome.tabs.update, agent.tabId, { active: false });
-    }
-  }
+  await Promise.all(
+    state.agentTabs.map(async (agent) => {
+      if (!state.running) return;
+      try {
+        const prompt = buildInitializationPrompt(agent);
+        const response = await sendPromptToAgent(agent, prompt);
+        const text = response?.text || "";
+        if (text.includes(`${agent.name}、準備完了`)) {
+          pushLog(`【${agent.name}】 初期化完了`);
+        } else {
+          pushLog(`【${agent.name}】 初期化応答: ${truncate(text)}`);
+        }
+      } catch (error) {
+        pushLog(`【${agent.name}】 初期化に失敗しました: ${error.message}`);
+      }
+    })
+  );
 }
-
 async function executeRounds(rounds, topic) {
   const roundLogs = [];
-  let previousContext = null;
-
   for (let round = 1; round <= rounds; round += 1) {
-    if (!state.running) {
-      pushLog(`ラウンド ${round} 開始前に停止されました。`);
-      break;
-    }
+    if (!state.running) break;
 
     pushLog(`ラウンド ${round}/${rounds} を実行しています…`);
 
-    const previousDigest = buildPreviousDigest(previousContext);
-    const coreAgents = getAgentsByNames(CORE_AGENT_NAMES);
-    const coreResponses = await broadcastRoundToAgents({
-      agents: coreAgents,
-      topic,
-      round,
-      previousDigest,
-    });
+    const template =
+      round === 1
+        ? buildFirstRoundPrompt(topic)
+        : buildFollowupPrompt(roundLogs[roundLogs.length - 1] || {});
 
-    const analyst = getAgentByName(ANALYST_NAME);
-    let analystResponse = null;
-    if (analyst) {
-      const analystPrompt = buildAnalystPrompt({
-        topic,
-        round,
-        responses: coreResponses,
-      });
-      const res = await sendPromptToAgent(analyst, analystPrompt);
-      analystResponse = res.text;
-      pushLog(`[${ANALYST_NAME}] 応答取得`);
-    }
-
-    const responses = {
-      ...coreResponses,
-      ...(analystResponse ? { [ANALYST_NAME]: analystResponse } : {}),
-    };
-
+    const responses = await broadcastPrompt(template);
     roundLogs.push(responses);
     state.roundLogs = roundLogs;
-    previousContext = { coreResponses, analystSummary: analystResponse };
 
     notify({ type: "ROUND_COMPLETE", round, responses });
   }
 }
 
 async function requestFinalSummary(topic) {
-  if (!state.roundLogs.length) {
-    throw new Error("議論ログが存在しないため、まとめを生成できません。");
-  }
-
-  const judge = getAgentByName(JUDGE_NAME);
+  const judge = state.agentTabs.find((agent) => agent.name === "JUDGE");
   if (!judge) {
     throw new Error("JUDGEタブが見つかりませんでした。");
   }
-  const prompt = buildJudgePrompt(topic, state.roundLogs);
+  const prompt = buildSummaryPrompt(topic, state.roundLogs);
   const response = await sendPromptToAgent(judge, prompt);
   return response.text;
 }
@@ -282,102 +256,84 @@ ${agent.systemPrompt}
 この役割を理解したら「${agent.name}、準備完了」と応答してください。`;
 }
 
-function buildAgentPrompt({ agent, topic, round, previousDigest }) {
-  const recap = previousDigest
-    ? `【前ラウンドの要約】\n${previousDigest}\n\n`
-    : "";
-  const roundLabel = round === 1 ? "【議題】" : "【議題（再掲）】";
-  const instruction = agent.roundInstruction
-    ? `【あなたへの追加指示】\n${agent.roundInstruction}\n\n`
-    : "";
-
-  return `あなたは ${agent.name} です。
-視点: ${agent.role}
-${agent.systemPrompt}
-
-${roundLabel}
+function buildFirstRoundPrompt(topic) {
+  return `【議題】
 ${topic}
 
-${recap}${instruction}上記を踏まえて、あなたの視点から意見を述べてください。日本語で500〜800文字程度、段落または箇条書きを交えてください。`;
+あなたの視点（{agent_role}）から、この議題について意見を述べてください。`;
 }
 
-function buildAnalystPrompt({ topic, round, responses }) {
-  const digest = formatResponses(responses);
-  return `あなたは ANALYST です。以下はラウンド${round}で各エージェントが述べた内容です。
-
-【議題】
-${topic}
-
-【参考発言】
+function buildFollowupPrompt(previousResponses) {
+  const digest = formatResponses(previousResponses);
+  return `【前ラウンドの議論】
 ${digest}
 
-以下の形式で日本語でまとめてください：
-1. 合意された点（箇条書き）
-2. 意見が分かれた点（箇条書き）
-3. 次ラウンドで深掘りすべき論点（箇条書き）
-4. 追加で気づいた示唆（任意）
-
-すべて箇条書きを中心に、200〜350文字程度でコンパクトにまとめてください。`;
+上記の議論を踏まえて、あなたの視点からさらに深掘りした意見、反論、または新たな観点を述べてください。`;
 }
 
-function buildJudgePrompt(topic, rounds) {
+function buildSummaryPrompt(topic, rounds) {
   const digest = rounds
-    .map((round, index) => `### ラウンド${index + 1}\n${formatResponses(round)}`)
+    .map((round, index) => `ラウンド${index + 1}:
+${formatResponses(round)}`)
     .join("\n\n");
 
-  return `あなたはJUDGEです。以下の議論ログを踏まえて、最終結論をMarkdown形式で作成してください。
+  return `【議論の総括依頼】
 
-## 議題
-${topic}
+議題: ${topic}
 
-## 出力フォーマット
-### 主要な論点
-- 箇条書き
+全${rounds.length}ラウンドの議論が終了しました。
+JUDGEとして、以下の観点から最終的なまとめを作成してください：
 
-### 合意された点
-- 箇条書き
+1. 各視点からの主要な論点
+2. 合意が得られた点
+3. 意見が分かれた点
+4. 最終的な結論・提案
 
-### 意見が分かれた点
-- 箇条書き
-
-### 推奨する結論・次のアクション
-- 箇条書きや段落で、実務的な提案
-
-## 議論ログ
+【参考】
 ${digest}
 
-上記フォーマットを厳守してください。`;
+簡潔かつ構造的にまとめてください。`;
 }
 
 function formatResponses(responses) {
-  return Object.entries(responses)
+  return Object.entries(responses || {})
     .map(([name, text]) => {
       const trimmed = (text || "").trim();
-      return `【${name}】\n${trimmed.slice(0, 800)}${
-        trimmed.length > 800 ? "..." : ""
-      }`;
+      return `【${name}】
+${trimmed.slice(0, 800)}${trimmed.length > 800 ? "..." : ""}`;
     })
     .join("\n\n");
 }
-
-async function broadcastRoundToAgents({ agents, topic, round, previousDigest }) {
+async function broadcastPrompt(template) {
   const results = {};
+  const participants = state.agentTabs.filter((agent) => agent.name !== "JUDGE");
 
   await Promise.all(
-    agents.map(async (agent) => {
-      const prompt = buildAgentPrompt({ agent, topic, round, previousDigest });
-      const response = await sendPromptToAgent(agent, prompt);
-      results[agent.name] = response.text;
-      pushLog(`[${agent.name}] 応答取得`);
+    participants.map(async (agent) => {
+      if (!state.running) return;
+
+      const prompt = template.replace("{agent_role}", agent.role);
+      try {
+        const response = await sendPromptToAgent(agent, prompt);
+        results[agent.name] = response.text;
+        pushLog(`【${agent.name}】 応答取得`);
+      } catch (error) {
+        results[agent.name] = `エラー: ${error.message}`;
+        pushLog(`【${agent.name}】 応答取得に失敗しました: ${error.message}`);
+      }
     })
   );
 
   return results;
 }
 
-async function sendPromptToAgent(agent, prompt, maxRetry = 2) {
+async function sendPromptToAgent(agent, prompt, maxRetry = 1) {
   let lastError;
   for (let attempt = 0; attempt <= maxRetry; attempt += 1) {
+    if (!state.running) {
+      throw new Error("議論が停止されました。");
+    }
+
     try {
       const response = await sendMessageToTab(agent.tabId, {
         type: "SEND_PROMPT",
@@ -385,23 +341,27 @@ async function sendPromptToAgent(agent, prompt, maxRetry = 2) {
         agentName: agent.name,
         timeout: RESPONSE_TIMEOUT_MS,
       });
+
       if (response?.status !== "ok") {
         throw new Error(response?.error ?? "不明なエラー");
       }
+
       return response.data;
     } catch (error) {
       lastError = error;
-      pushLog(
-        `[${agent.name}] 応答取得失敗 (${attempt + 1}/${maxRetry + 1}): ${error.message}`
-      );
-      if (attempt < maxRetry) {
+      if (attempt < maxRetry && isTransientError(error)) {
+        pushLog(
+          `【${agent.name}】 応答取得失敗（リトライ ${attempt + 1}/${maxRetry + 1}）: ${error.message}`
+        );
         await delay(1000 * (attempt + 1));
+        continue;
       }
+      break;
     }
   }
-  throw new Error(`[${agent.name}] 応答取得に失敗しました: ${lastError?.message}`);
-}
 
+  throw new Error(`【${agent.name}】 応答取得に失敗しました: ${lastError?.message ?? "不明なエラー"}`);
+}
 async function ensureContentReady(tabId) {
   const start = Date.now();
   while (Date.now() - start < CONTENT_READY_TIMEOUT_MS) {
@@ -422,7 +382,10 @@ async function ensureContentReady(tabId) {
 
 async function waitForTabComplete(tabId) {
   const tab = await getTab(tabId);
-  if (tab?.status === "complete") {
+  if (!tab) {
+    throw new Error(`tabId ${tabId} が見つかりませんでした。`);
+  }
+  if (tab.status === "complete") {
     return;
   }
 
@@ -450,28 +413,23 @@ async function waitForTabComplete(tabId) {
 
 async function prepareChromeCall(fn, ...args) {
   return new Promise((resolve, reject) => {
-    fn(...args, (result) => {
-      const err = chrome.runtime.lastError;
-      if (err) {
-        reject(new Error(err.message));
-        return;
-      }
-      resolve(result);
-    });
+    try {
+      fn(...args, (result) => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          reject(new Error(err.message));
+          return;
+        }
+        resolve(result);
+      });
+    } catch (error) {
+      reject(error);
+    }
   });
 }
 
 function createTab(options) {
   return prepareChromeCall(chrome.tabs.create, options);
-}
-
-function disableAutoDiscard(tabId) {
-  return prepareChromeCall(chrome.tabs.update, tabId, {
-    autoDiscardable: false,
-    muted: true,
-  }).catch((error) => {
-    pushLog(`タブ${tabId}の自動スリープ設定に失敗: ${error.message}`);
-  });
 }
 
 function safeRemoveTab(tabId) {
@@ -485,17 +443,20 @@ function getTab(tabId) {
 
 function sendMessageToTab(tabId, payload) {
   return new Promise((resolve, reject) => {
-    chrome.tabs.sendMessage(tabId, payload, (response) => {
-      const err = chrome.runtime.lastError;
-      if (err) {
-        reject(new Error(err.message));
-        return;
-      }
-      resolve(response);
-    });
+    try {
+      chrome.tabs.sendMessage(tabId, payload, (response) => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          reject(new Error(err.message));
+          return;
+        }
+        resolve(response);
+      });
+    } catch (error) {
+      reject(error);
+    }
   });
 }
-
 function pushLog(message) {
   const entry = {
     timestamp: new Date().toISOString(),
@@ -510,30 +471,38 @@ function pushLog(message) {
 }
 
 function notify(event) {
-  chrome.runtime.sendMessage(event, () => {
-    const err = chrome.runtime.lastError;
-    if (
-      err &&
-      !err.message.includes("Receiving end does not exist") &&
-      !err.message.includes("The message port closed before a response was received")
-    ) {
-      console.warn("MAGI notify error:", err);
-    }
-  });
+  try {
+    chrome.runtime.sendMessage(event, () => {
+      const err = chrome.runtime.lastError;
+      if (
+        err &&
+        !err.message.includes("Receiving end does not exist") &&
+        !err.message.includes("The message port closed before a response was received")
+      ) {
+        console.warn("MAGI notify error:", err);
+      }
+    });
+  } catch (error) {
+    console.warn("MAGI notify error (sync):", error);
+  }
+}
+
+function getPublicState() {
+  return {
+    running: state.running,
+    topic: state.topic,
+    plannedRounds: state.plannedRounds,
+    logs: state.logs,
+    roundLogs: state.roundLogs,
+    summary: state.summary,
+    agents: state.agentTabs.map(({ name, tabId }) => ({ name, tabId })),
+  };
 }
 
 function notifyState() {
   notify({
     type: "STATE_UPDATE",
-    state: {
-      running: state.running,
-      topic: state.topic,
-      plannedRounds: state.plannedRounds,
-      logs: state.logs,
-      roundLogs: state.roundLogs,
-      summary: state.summary,
-      agents: state.agentTabs.map(({ name, tabId }) => ({ name, tabId })),
-    },
+    state: getPublicState(),
   });
 }
 
@@ -548,41 +517,19 @@ function delay(ms) {
 }
 
 function isNoReceivingEndError(error) {
+  if (!error?.message) return false;
   return (
-    error?.message?.includes("Receiving end does not exist") ||
-    error?.message?.includes("No tab with id")
+    error.message.includes("Receiving end does not exist") ||
+    error.message.includes("No tab with id") ||
+    error.message.includes("Could not establish connection. Receiving end does not exist.")
   );
 }
 
-async function ensureTabVisible(tabId) {
-  try {
-    await prepareChromeCall(chrome.tabs.update, tabId, { active: true });
-    await delay(INITIALIZATION_ACTIVE_DURATION_MS);
-  } catch (error) {
-    pushLog(`タブ${tabId}の表示切替に失敗: ${error.message}`);
-  }
+function isTransientError(error) {
+  if (!error?.message) return false;
+  const msg = error.message;
+  return (
+    isNoReceivingEndError(error) ||
+    msg.includes("The message port closed before a response was received")
+  );
 }
-
-function buildPreviousDigest(previousContext) {
-  if (!previousContext) {
-    return "";
-  }
-
-  const summaryPart = previousContext.analystSummary
-    ? `ANALYST要約:\n${previousContext.analystSummary}`
-    : "";
-  const rawPart = previousContext.coreResponses
-    ? formatResponses(previousContext.coreResponses)
-    : "";
-
-  return [summaryPart, rawPart].filter(Boolean).join("\n\n").slice(0, 2_000);
-}
-
-function getAgentsByNames(nameSet) {
-  return state.agentTabs.filter((agent) => nameSet.has(agent.name));
-}
-
-function getAgentByName(name) {
-  return state.agentTabs.find((agent) => agent.name === name);
-}
-

@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <title>MAGI System</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <h1>MAGI Parallel Debate</h1>
+      <p class="status" id="status">待機中</p>
+    </header>
+
+    <form id="control-form">
+      <label>
+        議題
+        <textarea
+          id="topic-input"
+          rows="3"
+          placeholder="例: AIは人間の仕事を奪うか？"
+          required
+        ></textarea>
+      </label>
+
+      <label class="rounds-row">
+        ラウンド数
+        <input id="rounds-input" type="number" min="1" max="10" value="3" />
+      </label>
+
+      <div class="button-row">
+        <button type="submit" id="start-btn">議論を開始</button>
+        <button type="button" id="stop-btn" class="secondary" disabled>停止</button>
+      </div>
+    </form>
+
+    <section>
+      <div class="section-header">
+        <h2>ログ</h2>
+        <button id="clear-log-btn" type="button">ログをクリア</button>
+      </div>
+      <pre id="log-view"></pre>
+    </section>
+
+    <section>
+      <h2>最終まとめ</h2>
+      <div id="summary-view">議論完了後に表示されます。</div>
+    </section>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
+

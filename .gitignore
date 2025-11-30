@@ -1,0 +1,17 @@
+# Browser profile (Chrome user data)
+browser_profile/
+
+# Session logs
+sessions/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+

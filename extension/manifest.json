@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "MAGI Parallel Debate System",
+  "description": "ChatGPTを5タブ並列で操作し、MAGI風の議論サイクルを自動実行します。",
+  "version": "2.0.0",
+  "permissions": [
+    "tabs",
+    "scripting",
+    "storage",
+    "activeTab"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "MAGI System",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ]
+}
+

@@ -241,13 +241,6 @@ async function startDiscussion(topic, rounds) {
       return;
     }
 
-    pushLog("各エージェントの役割を初期化しています…");
-    await initializeAgents();
-    if (!state.running) {
-      pushLog("議論が停止されました（初期化後）。");
-      return;
-    }
-
     pushLog(`議論ラウンドを実行します（${rounds} ラウンド予定）。`);
     await executeRounds(rounds, topic);
     if (!state.running) {
@@ -334,7 +327,7 @@ async function requestFinalSummary(topic) {
   if (!judge) {
     throw new Error("JUDGEタブが見つかりませんでした。");
   }
-  const prompt = buildSummaryPrompt(topic, state.roundLogs);
+  const prompt = buildSummaryPrompt(topic, state.roundLogs, judge);
   const response = await sendPromptToAgent(judge, prompt);
   return response.text;
 }
@@ -355,6 +348,9 @@ function buildFirstRoundPrompt(topic) {
   return `【議題】
 ${topic}
 
+【あなたの役割とルール】
+{agent_system_prompt}
+
 あなたの視点（{agent_role}）から、この議題について意見を述べてください。
 - 出力は日本語で、400〜800文字程度を目安にしてください。
 - 箇条書きや見出しを用いて、後続ラウンドで扱いやすいよう構造化してください。
@@ -366,6 +362,9 @@ function buildFollowupPrompt(previousResponses) {
   return `【前ラウンドの議論】
 ${digest}
 
+【あなたの役割とルール】
+{agent_system_prompt}
+
 上記の議論を踏まえて、あなたの視点（{agent_role}）から
 - 同意できる点／できない点
 - 追加で指摘すべき論点
@@ -373,13 +372,15 @@ ${digest}
 を述べてください。自分の役割に沿ってコメントし、必要に応じて他エージェントの名前を挙げて構いません。`;
 }
 
-function buildSummaryPrompt(topic, rounds) {
+function buildSummaryPrompt(topic, rounds, judgeAgent) {
   const digest = rounds
     .map((round, index) => `ラウンド${index + 1}:
 ${formatResponses(round)}`)
     .join("\n\n");
 
-  return `【議論の総括依頼】
+  return `${judgeAgent.systemPrompt}
+
+【議論の総括依頼】
 
 議題: ${topic}
 
@@ -415,7 +416,9 @@ async function broadcastPrompt(template) {
     participants.map(async (agent) => {
       if (!state.running) return;
 
-      const prompt = template.replace("{agent_role}", agent.role);
+      const prompt = template
+        .replace("{agent_role}", agent.role)
+        .replace("{agent_system_prompt}", agent.systemPrompt);
       try {
         const response = await sendPromptToAgent(agent, prompt);
         results[agent.name] = response.text;

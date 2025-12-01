@@ -631,6 +631,23 @@ async function executeRounds(rounds, topic) {
       pushLog("停止要求を受信したため、次のラウンドをスキップします。");
       break;
     }
+
+    if (round < rounds && state.running) {
+      const decision = await requestConvergenceDecision({
+        topic,
+        roundEntry,
+        round,
+        remainingRounds: rounds - round,
+        analystAgent,
+      });
+      if (decision?.decision === "STOP") {
+        pushLog(`ANALYSTの収束判定: これ以上のラウンドは不要 (${decision.reason || "理由: なし"})`);
+        break;
+      }
+      if (decision?.decision === "CONTINUE" && decision.reason) {
+        pushLog(`ANALYSTの収束判定: 継続 (${decision.reason})`);
+      }
+    }
   }
 }
 
@@ -762,6 +779,58 @@ function renderTemplate(template, agent) {
       .replace(/\{agent_system_prompt\}/g, agent.systemPrompt);
   }
   return "";
+}
+
+async function requestConvergenceDecision({ topic, roundEntry, round, remainingRounds, analystAgent }) {
+  if (!analystAgent || !roundEntry) return null;
+  try {
+    const prompt = buildConvergencePrompt(topic, roundEntry, round, remainingRounds, analystAgent);
+    const response = await sendPromptToAgent(analystAgent, prompt, 0);
+    return parseConvergenceDecision(response?.text || "");
+  } catch (error) {
+    pushLog(`収束判定の取得に失敗しました: ${error.message}`);
+    return null;
+  }
+}
+
+function buildConvergencePrompt(topic, roundEntry, round, remainingRounds, analystAgent) {
+  const participantsDigest = formatResponses(roundEntry.participants || {});
+  const analystSummary = roundEntry.analyst || "（ANALYST要約なし）";
+  return `${analystAgent.systemPrompt}
+
+【収束判定タスク】
+
+議題: ${topic}
+現在のラウンド: ${round}
+残り最大ラウンド数: ${remainingRounds}
+
+【ラウンド${round}の各エージェント発言】
+${participantsDigest}
+
+【ANALYST自身の要約】
+${analystSummary}
+
+あなたはファシリテーターとして、この時点で議論を続けるべきかを評価してください。
+
+【回答フォーマット】
+Decision: CONTINUE または STOP のどちらかを1語で記述
+Reason: そう判断した理由（1〜2文）
+
+例:
+Decision: STOP
+Reason: 主要論点が出揃い、JUDGEが結論可能と判断したため。`;
+}
+
+function parseConvergenceDecision(text) {
+  const normalized = (text || "").trim();
+  if (!normalized) return null;
+  const decisionMatch = normalized.match(/Decision\s*:\s*(STOP|CONTINUE)/i);
+  if (!decisionMatch) return null;
+  const reasonMatch = normalized.match(/Reason\s*:\s*([^\n]+)/i);
+  return {
+    decision: decisionMatch[1].toUpperCase(),
+    reason: reasonMatch ? reasonMatch[1].trim() : "",
+  };
 }
 async function broadcastPrompt(template, agentList) {
   const results = {};

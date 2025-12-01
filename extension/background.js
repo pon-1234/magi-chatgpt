@@ -6,6 +6,7 @@ const TAB_LOAD_TIMEOUT_MS = 60_000;
 const CONTENT_READY_TIMEOUT_MS = 60_000;
 const TAB_ACTIVATION_DURATION_MS = 2_000;
 const MAX_LOG_ENTRIES = 500;
+const TAB_REFOCUS_INTERVAL_MS = 45_000;
 
 const AGENTS = [
   {
@@ -435,36 +436,41 @@ async function broadcastPrompt(template) {
 
 async function sendPromptToAgent(agent, prompt, maxRetry = 1) {
   let lastError;
-  for (let attempt = 0; attempt <= maxRetry; attempt += 1) {
-    if (!state.running) {
-      throw new Error("議論が停止されました。");
-    }
-
-    try {
-      await ensureTabAwake(agent, "メッセージ送信");
-      const response = await sendMessageToTab(agent.tabId, {
-        type: "SEND_PROMPT",
-        prompt,
-        agentName: agent.name,
-        timeout: RESPONSE_TIMEOUT_MS,
-      });
-
-      if (response?.status !== "ok") {
-        throw new Error(response?.error ?? "不明なエラー");
+  const stopPeriodicActivation = startPeriodicActivation(agent, "応答待機");
+  try {
+    for (let attempt = 0; attempt <= maxRetry; attempt += 1) {
+      if (!state.running) {
+        throw new Error("議論が停止されました。");
       }
 
-      return response.data;
-    } catch (error) {
-      lastError = error;
-      if (attempt < maxRetry && isTransientError(error)) {
-        pushLog(
-          `【${agent.name}】 応答取得失敗（リトライ ${attempt + 1}/${maxRetry + 1}）: ${error.message}`
-        );
-        await delay(1000 * (attempt + 1));
-        continue;
+      try {
+        await ensureTabAwake(agent, "メッセージ送信");
+        const response = await sendMessageToTab(agent.tabId, {
+          type: "SEND_PROMPT",
+          prompt,
+          agentName: agent.name,
+          timeout: RESPONSE_TIMEOUT_MS,
+        });
+
+        if (response?.status !== "ok") {
+          throw new Error(response?.error ?? "不明なエラー");
+        }
+
+        return response.data;
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxRetry && isTransientError(error)) {
+          pushLog(
+            `【${agent.name}】 応答取得失敗（リトライ ${attempt + 1}/${maxRetry + 1}）: ${error.message}`
+          );
+          await delay(1000 * (attempt + 1));
+          continue;
+        }
+        break;
       }
-      break;
     }
+  } finally {
+    stopPeriodicActivation();
   }
 
   throw new Error(`【${agent.name}】 応答取得に失敗しました: ${lastError?.message ?? "不明なエラー"}`);
@@ -639,6 +645,40 @@ function isTransientError(error) {
     isNoReceivingEndError(error) ||
     msg.includes("The message port closed before a response was received")
   );
+}
+
+function startPeriodicActivation(agent, reason) {
+  if (!TAB_REFOCUS_INTERVAL_MS || TAB_REFOCUS_INTERVAL_MS <= 0) {
+    return () => {};
+  }
+
+  let cancelled = false;
+  let timerId = null;
+
+  const tick = async () => {
+    if (cancelled || !state.running) {
+      return;
+    }
+    try {
+      await temporarilyActivateTab(agent.tabId, `${reason}（バックアップ）`);
+    } catch (error) {
+      pushLog(`【${agent.name}】 定期アクティブ化でエラー: ${error.message}`);
+    } finally {
+      if (!cancelled) {
+        timerId = setTimeout(tick, TAB_REFOCUS_INTERVAL_MS);
+      }
+    }
+  };
+
+  timerId = setTimeout(tick, TAB_REFOCUS_INTERVAL_MS);
+
+  return () => {
+    cancelled = true;
+    if (timerId) {
+      clearTimeout(timerId);
+      timerId = null;
+    }
+  };
 }
 
 async function configureTabForLongRunning(tabId) {

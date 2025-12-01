@@ -4,6 +4,7 @@ const CHATGPT_URL = "https://chatgpt.com/";
 const RESPONSE_TIMEOUT_MS = 600_000;
 const TAB_LOAD_TIMEOUT_MS = 60_000;
 const CONTENT_READY_TIMEOUT_MS = 60_000;
+const TAB_ACTIVATION_DURATION_MS = 2_000;
 const MAX_LOG_ENTRIES = 500;
 
 const AGENTS = [
@@ -274,34 +275,38 @@ async function prepareAgentTabs() {
   await Promise.all(state.agentTabs.map((agent) => safeRemoveTab(agent.tabId)));
   state.agentTabs = [];
 
+  const originalActiveTabId = await getActiveTabId();
+
   for (const agent of AGENTS) {
     if (!state.running) return;
     const tab = await createTab({ url: CHATGPT_URL, active: false });
+    await configureTabForLongRunning(tab.id);
     await waitForTabComplete(tab.id);
     await ensureContentReady(tab.id);
+    await temporarilyActivateTab(tab.id, `初期表示 (${agent.name})`, originalActiveTabId);
     state.agentTabs.push({ ...agent, tabId: tab.id });
     pushLog(`【${agent.name}】 タブ準備完了 (tabId: ${tab.id})`);
   }
 }
 
 async function initializeAgents() {
-  await Promise.all(
-    state.agentTabs.map(async (agent) => {
-      if (!state.running) return;
-      try {
-        const prompt = buildInitializationPrompt(agent);
-        const response = await sendPromptToAgent(agent, prompt);
-        const text = response?.text || "";
-        if (text.includes(`${agent.name}、準備完了`)) {
-          pushLog(`【${agent.name}】 初期化完了`);
-        } else {
-          pushLog(`【${agent.name}】 初期化応答: ${truncate(text)}`);
-        }
-      } catch (error) {
-        pushLog(`【${agent.name}】 初期化に失敗しました: ${error.message}`);
+  for (const agent of state.agentTabs) {
+    if (!state.running) return;
+    try {
+      await ensureTabAwake(agent, "初期化");
+      await temporarilyActivateTab(agent.tabId, `初期化 (${agent.name})`);
+      const prompt = buildInitializationPrompt(agent);
+      const response = await sendPromptToAgent(agent, prompt);
+      const text = response?.text || "";
+      if (text.includes(`${agent.name}、準備完了`)) {
+        pushLog(`【${agent.name}】 初期化完了`);
+      } else {
+        pushLog(`【${agent.name}】 初期化応答: ${truncate(text)}`);
       }
-    })
-  );
+    } catch (error) {
+      pushLog(`【${agent.name}】 初期化に失敗しました: ${error.message}`);
+    }
+  }
 }
 async function executeRounds(rounds, topic) {
   const roundLogs = [];
@@ -432,6 +437,7 @@ async function sendPromptToAgent(agent, prompt, maxRetry = 1) {
     }
 
     try {
+      await ensureTabAwake(agent, "メッセージ送信");
       const response = await sendMessageToTab(agent.tabId, {
         type: "SEND_PROMPT",
         prompt,
@@ -629,4 +635,67 @@ function isTransientError(error) {
     isNoReceivingEndError(error) ||
     msg.includes("The message port closed before a response was received")
   );
+}
+
+async function configureTabForLongRunning(tabId) {
+  try {
+    await prepareChromeCall(chrome.tabs.update, tabId, {
+      muted: true,
+      autoDiscardable: false,
+    });
+  } catch (error) {
+    pushLog(`タブ${tabId}のスリープ防止設定に失敗: ${error.message}`);
+  }
+}
+
+async function ensureTabAwake(agent, context) {
+  try {
+    const tab = await getTab(agent.tabId);
+    if (!tab) {
+      throw new Error("タブ情報を取得できませんでした");
+    }
+
+    if (tab.discarded) {
+      pushLog(`【${agent.name}】 タブがスリープ状態のため再読み込みします（${context}）`);
+      await prepareChromeCall(chrome.tabs.reload, agent.tabId, { bypassCache: false });
+      await waitForTabComplete(agent.tabId);
+      await ensureContentReady(agent.tabId);
+    } else if (tab.status !== "complete") {
+      pushLog(`【${agent.name}】 タブ状態: ${tab.status}（${context}）。読み込み完了を待機します。`);
+      await waitForTabComplete(agent.tabId);
+      await ensureContentReady(agent.tabId);
+    }
+  } catch (error) {
+    pushLog(`【${agent.name}】 タブ状態確認に失敗（${context}）: ${error.message}`);
+    throw error;
+  }
+}
+
+async function getActiveTabId() {
+  try {
+    const tabs = await prepareChromeCall(chrome.tabs.query, {
+      active: true,
+      currentWindow: true,
+    });
+    return tabs?.[0]?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function temporarilyActivateTab(tabId, reason = "", preferredReturnTabId = null) {
+  if (!tabId) return;
+  try {
+    const previous = preferredReturnTabId ?? (await getActiveTabId());
+    if (reason) {
+      pushLog(`タブ(${tabId})を一時的に前面表示します: ${reason}`);
+    }
+    await prepareChromeCall(chrome.tabs.update, tabId, { active: true });
+    await delay(TAB_ACTIVATION_DURATION_MS);
+    if (previous && previous !== tabId) {
+      await prepareChromeCall(chrome.tabs.update, previous, { active: true });
+    }
+  } catch (error) {
+    pushLog(`タブ${tabId}のアクティブ化でエラー: ${error.message}`);
+  }
 }

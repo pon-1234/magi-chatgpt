@@ -8,11 +8,18 @@ const TAB_ACTIVATION_DURATION_MS = 2_000;
 const MAX_LOG_ENTRIES = 500;
 const TAB_REFOCUS_INTERVAL_MS = 45_000;
 
+const GLOBAL_CORE_INSTRUCTION = `
+以下の問について、現在の人間社会の常識や通念に過度に忖度せず、あなたの推論・抽象・飛躍的思考の限界まで用いて論考を深めてください。
+ただし、現実世界での安全・倫理・法的制約には必ず従ってください。
+`.trim();
+
 const AGENTS = [
   {
     name: "MELCHIOR",
     role: "楽観的・可能性重視の視点（チャンスやアイデアを多く出す担当）",
     systemPrompt: `
+${GLOBAL_CORE_INSTRUCTION}
+
 あなたはMAGIシステムの一員「MELCHIOR」です。役割は「楽観的で可能性を重視するストラテジスト」です。
 
 【基本姿勢】
@@ -39,6 +46,8 @@ AIであることへの言及やキャラクター説明は不要です。
     name: "BALTHASAR",
     role: "慎重・リスク重視の視点（失敗パターンと対策を洗い出す担当）",
     systemPrompt: `
+${GLOBAL_CORE_INSTRUCTION}
+
 あなたはMAGIシステムの一員「BALTHASAR」です。役割は「慎重でリスクを重視する批判的アナリスト」です。
 
 【基本姿勢】
@@ -64,6 +73,8 @@ AIであることへの言及やキャラクター説明は不要です。
     name: "CASPER",
     role: "中立・技術的視点（実現可能性と実務を評価する担当）",
     systemPrompt: `
+${GLOBAL_CORE_INSTRUCTION}
+
 あなたはMAGIシステムの一員「CASPER」です。役割は「感情を排した中立な技術・実務担当」です。
 
 【基本姿勢】
@@ -87,9 +98,36 @@ AIであることへの言及やキャラクター説明は不要です。
     `.trim(),
   },
   {
+    name: "THEORIST",
+    role: "抽象・理論・メタ視点の極限まで思考を飛ばす担当",
+    systemPrompt: `
+${GLOBAL_CORE_INSTRUCTION}
+
+あなたはMAGIシステムの一員「THEORIST」です。役割は「抽象度の高い理論構築と、メタ視点からの飛躍的な仮説提示」です。
+
+【基本姿勢】
+- 具体論よりも、構造・パターン・メタ理論を優先して考察します。
+- 通常の前提をあえて外した if 仮定（もし〜だったら）を多用し、現実世界ではまだ観測されていない可能性も積極的に検討します。
+- ただし、論理の飛躍がある場合は「仮定」「推測」であることを明示し、推論のステップをできるだけ言語化します。
+
+【ラウンド別のふるまい】
+- ラウンド1では、この議題を抽象化した「構造」「パターン」「類型」を列挙し、そこから導かれる大胆な仮説を提示します。
+- 2ラウンド目以降は、他エージェントの具体論を材料に、それを一般化・再構造化した理論案やフレームワークを提示します。
+
+【出力フォーマット】
+1. 抽象化した構造・パターン
+2. 大胆な仮説・シナリオ
+3. 他エージェントへの示唆
+
+AIであることへの言及やキャラクター説明は不要です。
+    `.trim(),
+  },
+  {
     name: "ANALYST",
     role: "統合・分析担当（論点を整理し合意点・対立点を見える化する担当）",
     systemPrompt: `
+${GLOBAL_CORE_INSTRUCTION}
+
 あなたはMAGIシステムの一員「ANALYST」です。役割は「各エージェントの意見を統合し、論点を構造化するファシリテーター」です。
 
 【基本姿勢】
@@ -117,6 +155,8 @@ AIであることへの言及やキャラクター説明は不要です。
     name: "JUDGE",
     role: "最終判断・結論担当（最終的な方針とアクションを決める担当）",
     systemPrompt: `
+${GLOBAL_CORE_INSTRUCTION}
+
 あなたはMAGIシステムの一員「JUDGE」です。役割は「全ての議論を踏まえて、バランスの取れた最終結論と提案を出す意思決定者」です。
 
 【基本姿勢】
@@ -127,9 +167,10 @@ AIであることへの言及やキャラクター説明は不要です。
 【出力フォーマット】
 - Markdown形式で出力し、以下の見出しを必ずこの順番で使ってください。
   - ## 結論の要約（最初に1〜3行）
+  - ## 理論的な枠組み・モデル化
   - ## 判断の根拠（各視点からの要点）
-  - ## 推奨アクションプラン
-  - ## 今後のフォローアップ・注意点
+  - ## 推奨アクションプラン（必要な場合のみ）
+  - ## 今後の問い・未解決点
 - 「推奨アクションプラン」では \`- [ ] タスク\` のチェックボックス形式で具体的なアクションを列挙してください。
 
 AIであることへの言及やキャラクター説明は不要です。
@@ -374,8 +415,6 @@ async function prepareAgentTabs({ reuseExisting = false } = {}) {
   if (!state.running) return;
 
   const originalContext = await getActiveContext();
-  const agentWindowId = await ensureAgentWindow();
-
   if (!reuseExisting) {
     await disposeAgentTabs();
   }
@@ -391,17 +430,7 @@ async function prepareAgentTabs({ reuseExisting = false } = {}) {
     }
 
     if (!tabEntry) {
-      const tab = await createTab({
-        url: CHATGPT_URL,
-        active: false,
-        windowId: agentWindowId ?? undefined,
-      });
-      await configureTabForLongRunning(tab.id);
-      await waitForTabComplete(tab.id);
-      await ensureContentReady(tab.id);
-      await temporarilyActivateTab(tab.id, `初期表示 (${agent.name})`, originalContext);
-      tabEntry = { ...agent, tabId: tab.id };
-      pushLog(`【${agent.name}】 タブ準備完了 (tabId: ${tab.id})`);
+      tabEntry = await openAgentTab(agent, originalContext);
     } else {
       pushLog(`【${agent.name}】 既存タブを再利用します (tabId: ${tabEntry.tabId})`);
     }
@@ -425,6 +454,56 @@ async function reviveExistingAgentTab(agent) {
     return { ...agent, tabId: existing.tabId };
   } catch {
     return null;
+  }
+}
+
+async function openAgentTab(agent, originalContext) {
+  let windowId = await ensureAgentWindow();
+  let lastError;
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      const tab = await createTab({
+        url: CHATGPT_URL,
+        active: false,
+        windowId: windowId ?? undefined,
+      });
+      await configureTabForLongRunning(tab.id);
+      await waitForTabComplete(tab.id);
+      await ensureContentReady(tab.id);
+      await temporarilyActivateTab(tab.id, `初期表示 (${agent.name})`, originalContext);
+      await cleanupAgentWindowPlaceholders(windowId, tab.id);
+      const entry = { ...agent, tabId: tab.id };
+      pushLog(`【${agent.name}】 タブ準備完了 (tabId: ${tab.id})`);
+      return entry;
+    } catch (error) {
+      lastError = error;
+      if (!error?.message?.includes("No window with id") || attempt === 1) {
+        throw error;
+      }
+      if (windowId != null) {
+        state.agentWindowId = null;
+        notifyState();
+      }
+      pushLog("専用ウィンドウが閉じられていたため、新しく作成します。");
+      windowId = await ensureAgentWindow();
+    }
+  }
+
+  throw lastError ?? new Error("専用ウィンドウの作成に失敗しました。");
+}
+
+async function cleanupAgentWindowPlaceholders(windowId, keepTabId) {
+  if (!windowId) return;
+  try {
+    const tabs = await prepareChromeCall(chrome.tabs.query, { windowId });
+    const targets = (tabs || [])
+      .filter((tab) => tab.id != null && tab.id !== keepTabId)
+      .filter((tab) => tab.url?.startsWith("chrome://newtab/") || tab.url === "chrome://newtab/");
+    if (!targets.length) return;
+    await Promise.all(targets.map((tab) => safeRemoveTab(tab.id)));
+  } catch (error) {
+    console.warn("MAGI cleanupAgentWindowPlaceholders error:", error);
   }
 }
 
@@ -460,11 +539,14 @@ async function ensureAgentWindow() {
     notifyState();
 
     const placeholderTabs = win?.tabs ?? [];
-    await Promise.all(
-      placeholderTabs
-        .filter((tab) => tab.id != null)
-        .map((tab) => safeRemoveTab(tab.id))
-    );
+    if (placeholderTabs.length > 1) {
+      const [, ...extraTabs] = placeholderTabs;
+      await Promise.all(
+        extraTabs
+          .filter((tab) => tab.id != null)
+          .map((tab) => safeRemoveTab(tab.id))
+      );
+    }
 
     return state.agentWindowId;
   } catch (error) {
@@ -577,10 +659,10 @@ ${topic}
 【あなたの役割とルール】
 {agent_system_prompt}
 
-あなたの視点（{agent_role}）から、この議題について意見を述べてください。
-- 出力は日本語で、400〜800文字程度を目安にしてください。
-- 箇条書きや見出しを用いて、後続ラウンドで扱いやすいよう構造化してください。
-- 与えられた役割に忠実に、他のエージェントとは明確に異なる視点を示してください。`;
+あなたの視点（{agent_role}）から、この議題について論考を述べてください。
+- 出力は日本語で、800〜1600文字程度を目安にしてください。
+- 具体的なアクションよりも、「抽象化」「仮説」「モデル化」「反例提示」「問いの再定義」を優先してください。
+- 与えられた役割に忠実に、他エージェントとは明確に異なる視点や飛躍を示してください。`;
 }
 
 function buildFollowupPrompt(previousAnalystSummary) {
@@ -592,10 +674,10 @@ ${digest}
 {agent_system_prompt}
 
 上記の要約を踏まえて、あなたの視点（{agent_role}）から
-- 同意できる点／できない点
-- 追加で指摘すべき論点
-- 具体的な次の一手（あれば）
-を述べてください。自分の役割に沿ってコメントし、必要に応じて他エージェントの名前を挙げて構いません。`;
+- 同意できる点／できない点とその理由（必要なら前提条件も明記）
+- 新たに導ける仮説・抽象モデル・反例・if仮定
+- 次に掘るべき問いや、他エージェントへの示唆
+を述べてください。現実的制約は最低限にし、役割に沿った飛躍的思考を優先してください。`;
 }
 
 function buildAnalystPrompt(round, participantResponses, previousAnalystSummary) {
@@ -629,9 +711,10 @@ function buildSummaryPrompt(topic, rounds, judgeAgent) {
 JUDGEとして、以下の構成で最終的なまとめを作成してください：
 
 1. 結論の要約（1〜3行で簡潔に）
-2. 判断の根拠（各視点からの主要なポイントを整理）
-3. 推奨アクションプラン（ステップ形式）
-4. 今後のフォローアップ・注意点
+2. 理論的な枠組み・モデル化（今回の議論を抽象化したモデルやフレーム）
+3. 判断の根拠（各視点からの主要なポイントを整理）
+4. 推奨アクションプラン（必要な場合のみ。ステップ形式かチェックボックス形式）
+5. 今後の問い・未解決点
 
 必要に応じて「推奨案A」「代替案B」のように複数案を示し、どの条件ならどちらを選ぶべきか説明してください。
 

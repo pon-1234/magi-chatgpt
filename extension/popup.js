@@ -9,7 +9,7 @@ const clearLogButton = document.getElementById("clear-log-btn");
 const downloadLogButton = document.getElementById("download-log-btn");
 const startButton = document.getElementById("start-btn");
 const stopButton = document.getElementById("stop-btn");
-const AGENT_DISPLAY_ORDER = ["MELCHIOR", "BALTHASAR", "CASPER", "ANALYST", "JUDGE"];
+const AGENT_DISPLAY_ORDER = ["MELCHIOR", "BALTHASAR", "CASPER", "THEORIST", "ANALYST", "JUDGE"];
 
 let latestState = null;
 

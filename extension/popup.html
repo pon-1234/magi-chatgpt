@@ -36,9 +36,17 @@
     <section>
       <div class="section-header">
         <h2>ログ</h2>
-        <button id="clear-log-btn" type="button">ログをクリア</button>
+        <div class="section-actions">
+          <button id="download-log-btn" type="button" class="secondary">ログを保存</button>
+          <button id="clear-log-btn" type="button" class="secondary">ログをクリア</button>
+        </div>
       </div>
       <pre id="log-view"></pre>
+    </section>
+
+    <section>
+      <h2>ラウンド結果</h2>
+      <div id="rounds-view" class="rounds-view">ラウンド結果はまだありません。</div>
     </section>
 
     <section>

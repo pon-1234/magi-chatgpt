@@ -5,10 +5,32 @@ const COMPOSER_WAIT_TIMEOUT = 60_000;
 const COMPOSER_SELECTORS = [
   'textarea[data-id="root"]',
   'textarea[data-testid="textbox"]',
+  'textarea[data-testid="prompt-textarea"]',
   'textarea[placeholder*="Send a message"]',
+  'textarea[placeholder*="メッセージ"]',
   "#prompt-textarea",
+  'div[contenteditable="true"][data-testid="textbox"]',
   'div[contenteditable="true"][data-placeholder]',
+  'div[contenteditable="true"][aria-label*="メッセージ"]',
   "form textarea",
+];
+
+const CONTINUE_BUTTON_PATTERNS = [
+  /continue\s+generating/i,
+  /continue\s+writing/i,
+  /resume\s+generating/i,
+  /generate\s+anyway/i,
+  /生成を続ける/,
+  /生成を再開/,
+  /生成を継続/,
+  /続けて生成/,
+];
+
+const BLOCKING_TEXT_PATTERNS = [
+  { pattern: /something went wrong/i, message: "ChatGPT側でエラーが発生しました。ページを再読み込みしてください。" },
+  { pattern: /please log in/i, message: "ChatGPTにログインしてください。" },
+  { pattern: /session expired/i, message: "ChatGPTのセッションが期限切れです。再ログインしてください。" },
+  { pattern: /network error/i, message: "ChatGPTでネットワークエラーが発生しました。" },
 ];
 
 let isBusy = false;
@@ -63,7 +85,7 @@ async function waitForComposer(timeout = COMPOSER_WAIT_TIMEOUT) {
     await delay(500);
   }
   throw new Error(
-    "入力欄を検出できませんでした。ChatGPTにログイン済みか、ページ構造の変更がないか確認してください。"
+    "入力欄を検出できませんでした。ChatGPTにログイン済みか確認し、一度手動でメッセージ欄をクリックしてから再実行してください（UIが変わっている場合は拡張機能のアップデートをお待ちください）。"
   );
 }
 
@@ -158,6 +180,7 @@ async function waitForNewAssistantResponse(knownIds, timeout = DEFAULT_RESPONSE_
   return new Promise((resolve, reject) => {
     let observer;
     let intervalId;
+    let continueIntervalId;
     let lastMessage = null;
 
     const cleanup = () => {
@@ -165,13 +188,19 @@ async function waitForNewAssistantResponse(knownIds, timeout = DEFAULT_RESPONSE_
       if (intervalId) {
         clearInterval(intervalId);
       }
+      if (continueIntervalId) {
+        clearInterval(continueIntervalId);
+      }
     };
 
     const isGenerating = () => {
-      return Boolean(
+      if (
         document.querySelector('button[data-testid="stop-button"]') ||
-          document.querySelector('button[aria-label*="Stop generating"]')
-      );
+        document.querySelector('button[aria-label*="Stop generating"]')
+      ) {
+        return true;
+      }
+      return clickContinueButtonIfPresent();
     };
 
     const finalizeIfStable = () => {
@@ -192,6 +221,15 @@ async function waitForNewAssistantResponse(knownIds, timeout = DEFAULT_RESPONSE_
       if (Date.now() - start > timeout) {
         cleanup();
         reject(new Error("ChatGPTの応答待ちがタイムアウトしました。"));
+        return;
+      }
+
+      clickContinueButtonIfPresent();
+
+      const blockingIssue = detectBlockingIssues();
+      if (blockingIssue) {
+        cleanup();
+        reject(new Error(blockingIssue));
         return;
       }
 
@@ -231,9 +269,49 @@ async function waitForNewAssistantResponse(knownIds, timeout = DEFAULT_RESPONSE_
     observer.observe(document.body, { childList: true, subtree: true });
 
     intervalId = setInterval(() => checkForResponse(), 1000);
+    continueIntervalId = setInterval(() => clickContinueButtonIfPresent(), 1500);
 
     checkForResponse();
   });
+}
+
+function clickContinueButtonIfPresent() {
+  const buttons = Array.from(document.querySelectorAll("button"));
+  for (const button of buttons) {
+    if (button.disabled) continue;
+    const text = button.textContent?.trim() ?? "";
+    const aria = button.getAttribute("aria-label") || "";
+    const testId = button.dataset?.testid || "";
+    if (isContinueButtonMatch(text) || isContinueButtonMatch(aria) || /continue/i.test(testId)) {
+      button.click();
+      return true;
+    }
+  }
+  return false;
+}
+
+function isContinueButtonMatch(text) {
+  if (!text) return false;
+  if (CONTINUE_BUTTON_PATTERNS.some((pattern) => pattern.test(text))) {
+    return true;
+  }
+  if (/continue/i.test(text) && !/continue with/i.test(text)) {
+    return true;
+  }
+  return false;
+}
+
+function detectBlockingIssues() {
+  if (document.querySelector('button[data-testid="login-button"]')) {
+    return "ChatGPTにログインしてください。";
+  }
+  const bodyText = document.body?.innerText || "";
+  for (const { pattern, message } of BLOCKING_TEXT_PATTERNS) {
+    if (pattern.test(bodyText)) {
+      return message;
+    }
+  }
+  return null;
 }
 
 function delay(ms) {

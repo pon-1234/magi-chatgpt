@@ -25,8 +25,9 @@ const AGENTS = [
 - 前ラウンド情報が無い場合（ラウンド1想定）は、議題のポジティブな解釈・想定ユーザーのチャンス・初期アクション案を構造的に提示してください。
 - 前ラウンド情報がある場合は、他エージェントの意見のうち前向きに伸ばせる点を強調し、さらに発展させる具体案を提案してください。
 
-【出力形式】
-1. 前提（どう解釈したか）
+【出力フォーマット】
+以下の番号付き見出しを必ずこの順番・ラベルで出力し、各見出しの次の行から本文を書いてください（箇条書き歓迎）。
+1. 前提
 2. ポジティブなポイント
 3. チャンスとアイデア
 4. 推奨アクション
@@ -49,9 +50,10 @@ AIであることへの言及やキャラクター説明は不要です。
 - 前ラウンド情報が無い場合は、典型的な失敗パターン・原因・回避に必要な前提条件を整理してください。
 - 前ラウンド情報がある場合は、他エージェントの提案の前提の甘さや盲点を指摘し、それでも実行するなら守るべき「安全ライン」を示してください。
 
-【出力形式】
-1. 主な懸念点（概要）
-2. リスク一覧（内容／影響度／発生可能性）
+【出力フォーマット】
+以下の番号付き見出しをこの順番で必ず出力し、各見出し直下に本文を書いてください。
+1. 主な懸念点
+2. リスク一覧（内容／影響度／発生可能性をセットで列挙）
 3. 想定される最悪ケース
 4. 対策・前提条件
 
@@ -74,7 +76,8 @@ AIであることへの言及やキャラクター説明は不要です。
 - 前ラウンド情報が無い場合は、技術・実務の論点整理、主な選択肢、コスト構造や難易度をまとめてください。
 - 前ラウンド情報がある場合は、他エージェントの提案を踏まえ、実行可能性・工数・リスクを考慮した現実的な落とし所を提案してください。
 
-【出力形式】
+【出力フォーマット】
+以下の見出しを必ずこの順序・番号で記載し、論点は箇条書きで整理してください。
 1. 前提と仮定
 2. 技術・実務的な論点整理
 3. 主な選択肢とトレードオフ
@@ -92,18 +95,20 @@ AIであることへの言及やキャラクター説明は不要です。
 【基本姿勢】
 - MELCHIOR / BALTHASAR / CASPER の発言を読み、共通点・相違点・見落としを整理します。
 - 自分の意見を増やしすぎず、メタ視点から整理・再構成することを主とします。
+- あなたの入力は毎ラウンドの3エージェント発言（＋必要があれば前回要約）です。そこから論点を圧縮し、次ラウンドに渡す集約役です。
 
 【ラウンド別のふるまい】
 - プロンプト本文に「【前ラウンドの議論】」という見出しが含まれていなければ、前ラウンド情報が無い（ラウンド1）とみなしてください。
 - 前ラウンド情報が無い場合は、この議題で後続ラウンドが議論すべき観点と論点マップを提示してください。
 - 前ラウンド情報がある場合は、各エージェントの要約、合意点／相違点、追加で検討すべき論点、JUDGEが判断しやすい候補打ち手を整理してください。
 
-【出力形式】
-1. 各エージェントの要約
+【出力フォーマット】
+以下の番号付き見出しをこの順に用い、各見出し直後の行から本文を記述してください。
+1. MELCHIOR / BALTHASAR / CASPER の要約
 2. 合意点
 3. 相違点・争点
 4. 追加で検討すべき論点
-5. 候補となる打ち手の整理
+5. JUDGE が検討すべき候補打ち手
 
 AIであることへの言及やキャラクター説明は不要です。
     `.trim(),
@@ -119,16 +124,22 @@ AIであることへの言及やキャラクター説明は不要です。
 - 必要に応じて「推奨案A」「代替案B」を示し、どの条件ならどちらを選ぶべきかも説明します。
 - 結論だけでなく、その判断に至った根拠を簡潔に示します。
 
-【出力形式】
-1. 結論の要約（最初に1〜3行）
-2. 判断の根拠（各視点からの要点）
-3. 推奨アクションプラン（ステップ形式）
-4. 今後のフォローアップ・注意点
+【出力フォーマット】
+- Markdown形式で出力し、以下の見出しを必ずこの順番で使ってください。
+  - ## 結論の要約（最初に1〜3行）
+  - ## 判断の根拠（各視点からの要点）
+  - ## 推奨アクションプラン
+  - ## 今後のフォローアップ・注意点
+- 「推奨アクションプラン」では \`- [ ] タスク\` のチェックボックス形式で具体的なアクションを列挙してください。
 
 AIであることへの言及やキャラクター説明は不要です。
     `.trim(),
   },
 ];
+
+const STORAGE_AREA = chrome.storage?.session ?? chrome.storage.local;
+const STORAGE_KEY = "magi_state";
+const STATE_PERSIST_DEBOUNCE_MS = 250;
 
 const state = {
   running: false,
@@ -138,56 +149,95 @@ const state = {
   logs: [],
   roundLogs: [],
   summary: "",
+  agentWindowId: null,
+  stopRequested: false,
 };
 
 let keepAliveIntervalId = null;
+let persistTimerId = null;
+let activeWorkflowPromise = null;
+let stateReadyPromise = restoreState();
+
+chrome.runtime.onStartup.addListener(() => {
+  stateReadyPromise = restoreState();
+});
+
+if (chrome.runtime.onSuspend) {
+  chrome.runtime.onSuspend.addListener(() => {
+    persistState().catch((error) => {
+      console.warn("MAGI persist on suspend failed:", error);
+    });
+  });
+}
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "START_DISCUSSION") {
-    const topic = (message.topic || "").trim();
-    const rounds = Number(message.rounds) || 3;
+    (async () => {
+      try {
+        await ensureStateReady();
+        const topic = (message.topic || "").trim();
+        const rounds = Number(message.rounds) || 3;
 
-    if (!topic) {
-      sendResponse({ status: "error", message: "議題を入力してください。" });
-      return;
-    }
+        if (!topic) {
+          sendResponse({ status: "error", message: "議題を入力してください。" });
+          return;
+        }
 
-    if (state.running) {
-      sendResponse({
-        status: "error",
-        message: "別の議論が進行中です。完了を待ってから再実行してください。",
-      });
-      return;
-    }
+        if (state.running) {
+          sendResponse({
+            status: "error",
+            message: "別の議論が進行中です。完了を待ってから再実行してください。",
+          });
+          return;
+        }
 
-    sendResponse({ status: "ok" });
-
-    startDiscussion(topic, rounds).catch((error) => {
-      pushLog(`エラー: ${error.message}`);
-      notify({ type: "DISCUSSION_ERROR", message: error.message });
-    });
-    return;
+        sendResponse({ status: "ok" });
+        startDiscussion(topic, rounds).catch((error) => {
+          pushLog(`エラー: ${error.message}`);
+          notify({ type: "DISCUSSION_ERROR", message: error.message });
+        });
+      } catch (error) {
+        sendResponse({ status: "error", message: error.message });
+      }
+    })();
+    return true;
   }
 
   if (message?.type === "GET_STATE") {
-    sendResponse({
-      status: "ok",
-      state: getPublicState(),
-    });
-    return;
+    (async () => {
+      try {
+        await ensureStateReady();
+        sendResponse({
+          status: "ok",
+          state: getPublicState(),
+        });
+      } catch (error) {
+        sendResponse({ status: "error", message: error.message });
+      }
+    })();
+    return true;
   }
 
   if (message?.type === "STOP_DISCUSSION") {
-    if (!state.running) {
-      sendResponse({ status: "ok" });
-      return;
-    }
+    (async () => {
+      try {
+        await ensureStateReady();
+        if (!state.running) {
+          sendResponse({ status: "ok" });
+          return;
+        }
 
-    state.running = false;
-    pushLog("ユーザーから議論停止要求を受信しました。現在のラウンド終了後に停止します。");
-    notifyState();
-    sendResponse({ status: "ok" });
-    return;
+        state.stopRequested = true;
+        pushLog("ユーザーから議論停止要求を受信しました。現在のラウンド終了後に停止します。");
+        notifyState();
+        sendResponse({ status: "ok" });
+      } catch (error) {
+        sendResponse({ status: "error", message: error.message });
+      }
+    })();
+    return true;
   }
+
+  return undefined;
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
@@ -197,6 +247,13 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     state.agentTabs.splice(index, 1);
     pushLog(`【${removed.name}】 のタブ (${tabId}) が閉じられました。必要であれば議論を再実行してください。`);
     notify({ type: "AGENT_TAB_CLOSED", tabId, agentName: removed.name });
+    notifyState();
+  }
+});
+
+chrome.windows.onRemoved.addListener((windowId) => {
+  if (state.agentWindowId === windowId) {
+    state.agentWindowId = null;
     notifyState();
   }
 });
@@ -224,62 +281,195 @@ function stopKeepAlive() {
   }
 }
 async function startDiscussion(topic, rounds) {
+  await ensureStateReady();
+  await disposeAgentTabs();
   state.running = true;
+  state.stopRequested = false;
   state.topic = topic;
   state.plannedRounds = rounds;
   state.roundLogs = [];
   state.summary = "";
   state.logs = [];
+  state.agentTabs = [];
+  scheduleStatePersist();
   pushLog(`議論を開始します: 「${topic}」 (ラウンド数: ${rounds})`);
   notifyState();
-  startKeepAlive();
+  await runDiscussionWorkflow({ resume: false });
+}
+
+async function runDiscussionWorkflow({ resume = false } = {}) {
+  if (!state.running) return;
+
+  if (activeWorkflowPromise) {
+    await activeWorkflowPromise;
+    return;
+  }
+
+  activeWorkflowPromise = (async () => {
+    startKeepAlive();
+    try {
+      if (resume) {
+        pushLog("前回の議論状態を復元しています…");
+        await prepareAgentTabs({ reuseExisting: true });
+      } else {
+        pushLog("エージェント用タブを準備しています…");
+        await prepareAgentTabs({ reuseExisting: false });
+        pushLog("各エージェントを初期化しています…");
+        await initializeAgents();
+      }
+      if (!state.running) {
+        pushLog("議論が停止されました（タブ準備後）。");
+        return;
+      }
+
+      const plannedRounds = state.plannedRounds;
+      pushLog(`議論ラウンドを実行します（${plannedRounds} ラウンド予定）。`);
+      await executeRounds(plannedRounds, state.topic);
+
+      if (state.summary) {
+        pushLog("最終まとめは既に生成済みです。");
+        return;
+      }
+
+      const hasAnyRounds = state.roundLogs.length > 0;
+      if (!hasAnyRounds) {
+        if (state.stopRequested) {
+          pushLog("ラウンド開始前に停止要求があったため、 summary を生成せず終了します。");
+        }
+        return;
+      }
+
+      if (state.stopRequested) {
+        pushLog("途中停止のため暫定まとめを生成します…");
+      } else {
+        pushLog("JUDGE による最終まとめを依頼しています…");
+      }
+
+      const summary = await requestFinalSummary(state.topic);
+      state.summary = summary;
+      notify({
+        type: "DISCUSSION_COMPLETE",
+        summary,
+        rounds: state.roundLogs,
+        partial: state.stopRequested,
+      });
+      notifyState();
+      pushLog(state.stopRequested ? "暫定まとめを生成しました。" : "議論が完了しました。");
+    } finally {
+      state.running = false;
+      state.stopRequested = false;
+      stopKeepAlive();
+      notifyState();
+    }
+  })();
 
   try {
-    pushLog("エージェント用タブを準備しています…");
-    await prepareAgentTabs();
-    if (!state.running) {
-      pushLog("議論が停止されました（タブ準備後）。");
-      return;
-    }
-
-    pushLog(`議論ラウンドを実行します（${rounds} ラウンド予定）。`);
-    await executeRounds(rounds, topic);
-    if (!state.running) {
-      pushLog("議論はユーザーにより停止されました。最終まとめは生成しません。");
-      return;
-    }
-
-    pushLog("JUDGE による最終まとめを依頼しています…");
-    const summary = await requestFinalSummary(topic);
-    state.summary = summary;
-    notify({
-      type: "DISCUSSION_COMPLETE",
-      summary,
-      rounds: state.roundLogs,
-    });
-    pushLog("議論が完了しました。");
+    await activeWorkflowPromise;
   } finally {
-    state.running = false;
-    stopKeepAlive();
-    notifyState();
+    activeWorkflowPromise = null;
   }
 }
 
-async function prepareAgentTabs() {
-  await Promise.all(state.agentTabs.map((agent) => safeRemoveTab(agent.tabId)));
-  state.agentTabs = [];
+async function prepareAgentTabs({ reuseExisting = false } = {}) {
+  if (!state.running) return;
 
   const originalContext = await getActiveContext();
+  const agentWindowId = await ensureAgentWindow();
+
+  if (!reuseExisting) {
+    await disposeAgentTabs();
+  }
+
+  const preparedTabs = [];
 
   for (const agent of AGENTS) {
-    if (!state.running) return;
-    const tab = await createTab({ url: CHATGPT_URL, active: false });
-    await configureTabForLongRunning(tab.id);
-    await waitForTabComplete(tab.id);
-    await ensureContentReady(tab.id);
-    await temporarilyActivateTab(tab.id, `初期表示 (${agent.name})`, originalContext);
-    state.agentTabs.push({ ...agent, tabId: tab.id });
-    pushLog(`【${agent.name}】 タブ準備完了 (tabId: ${tab.id})`);
+    if (!state.running) break;
+
+    let tabEntry = null;
+    if (reuseExisting) {
+      tabEntry = await reviveExistingAgentTab(agent);
+    }
+
+    if (!tabEntry) {
+      const tab = await createTab({
+        url: CHATGPT_URL,
+        active: false,
+        windowId: agentWindowId ?? undefined,
+      });
+      await configureTabForLongRunning(tab.id);
+      await waitForTabComplete(tab.id);
+      await ensureContentReady(tab.id);
+      await temporarilyActivateTab(tab.id, `初期表示 (${agent.name})`, originalContext);
+      tabEntry = { ...agent, tabId: tab.id };
+      pushLog(`【${agent.name}】 タブ準備完了 (tabId: ${tab.id})`);
+    } else {
+      pushLog(`【${agent.name}】 既存タブを再利用します (tabId: ${tabEntry.tabId})`);
+    }
+
+    preparedTabs.push(tabEntry);
+  }
+
+  state.agentTabs = preparedTabs;
+  notifyState();
+}
+
+async function reviveExistingAgentTab(agent) {
+  const existing = state.agentTabs.find((entry) => entry.name === agent.name);
+  if (!existing?.tabId) {
+    return null;
+  }
+  try {
+    await getTab(existing.tabId);
+    await configureTabForLongRunning(existing.tabId);
+    await ensureContentReady(existing.tabId);
+    return { ...agent, tabId: existing.tabId };
+  } catch {
+    return null;
+  }
+}
+
+async function disposeAgentTabs() {
+  if (!state.agentTabs.length) {
+    return;
+  }
+  const tabsToClose = [...state.agentTabs];
+  state.agentTabs = [];
+  notifyState();
+  await Promise.all(tabsToClose.map((agent) => safeRemoveTab(agent.tabId)));
+}
+
+async function ensureAgentWindow() {
+  if (state.agentWindowId) {
+    try {
+      await prepareChromeCall(chrome.windows.get, state.agentWindowId, { populate: false });
+      return state.agentWindowId;
+    } catch {
+      state.agentWindowId = null;
+      notifyState();
+    }
+  }
+
+  try {
+    const win = await prepareChromeCall(chrome.windows.create, {
+      focused: false,
+      state: "minimized",
+      url: "chrome://newtab/",
+      type: "normal",
+    });
+    state.agentWindowId = win?.id ?? null;
+    notifyState();
+
+    const placeholderTabs = win?.tabs ?? [];
+    await Promise.all(
+      placeholderTabs
+        .filter((tab) => tab.id != null)
+        .map((tab) => safeRemoveTab(tab.id))
+    );
+
+    return state.agentWindowId;
+  } catch (error) {
+    pushLog(`専用ウィンドウの作成に失敗しました: ${error.message}`);
+    return null;
   }
 }
 
@@ -304,22 +494,57 @@ async function initializeAgents() {
   }
 }
 async function executeRounds(rounds, topic) {
-  const roundLogs = [];
-  for (let round = 1; round <= rounds; round += 1) {
+  const roundLogs = normalizeRoundLogs(state.roundLogs);
+  state.roundLogs = roundLogs;
+
+  if (roundLogs.length >= rounds) {
+    return;
+  }
+
+  const participantAgents = state.agentTabs.filter(
+    (agent) => agent.name !== "ANALYST" && agent.name !== "JUDGE"
+  );
+  const analystAgent = state.agentTabs.find((agent) => agent.name === "ANALYST");
+  if (!analystAgent) {
+    throw new Error("ANALYSTタブが見つかりませんでした。");
+  }
+
+  let previousAnalystSummary =
+    roundLogs.length > 0 ? roundLogs[roundLogs.length - 1]?.analyst ?? "" : "";
+
+  for (let round = roundLogs.length + 1; round <= rounds; round += 1) {
     if (!state.running) break;
 
     pushLog(`ラウンド ${round}/${rounds} を実行しています…`);
 
     const template =
-      round === 1
+      round === 1 && !previousAnalystSummary
         ? buildFirstRoundPrompt(topic)
-        : buildFollowupPrompt(roundLogs[roundLogs.length - 1] || {});
+        : buildFollowupPrompt(previousAnalystSummary);
 
-    const responses = await broadcastPrompt(template);
-    roundLogs.push(responses);
-    state.roundLogs = roundLogs;
+    const participantResponses = await broadcastPrompt(template, participantAgents);
 
-    notify({ type: "ROUND_COMPLETE", round, responses });
+    pushLog("ANALYST に前ラウンドの要約を依頼しています…");
+    const analystPrompt = buildAnalystPrompt(round, participantResponses, previousAnalystSummary);
+    const analystResponse = await sendPromptToAgent(analystAgent, analystPrompt, 1);
+    const analystSummary = (analystResponse?.text || "").trim();
+    previousAnalystSummary = analystSummary;
+
+    const roundEntry = {
+      round,
+      participants: participantResponses,
+      analyst: analystSummary,
+    };
+    roundLogs.push(roundEntry);
+    state.roundLogs = roundLogs.slice();
+
+    notify({ type: "ROUND_COMPLETE", round, responses: participantResponses, analyst: analystSummary });
+    notifyState();
+
+    if (state.stopRequested) {
+      pushLog("停止要求を受信したため、次のラウンドをスキップします。");
+      break;
+    }
   }
 }
 
@@ -358,26 +583,41 @@ ${topic}
 - 与えられた役割に忠実に、他のエージェントとは明確に異なる視点を示してください。`;
 }
 
-function buildFollowupPrompt(previousResponses) {
-  const digest = formatResponses(previousResponses);
-  return `【前ラウンドの議論】
+function buildFollowupPrompt(previousAnalystSummary) {
+  const digest = (previousAnalystSummary || "").trim() || "（前ラウンドの要約はありません）";
+  return `【前ラウンドのANALYST要約】
 ${digest}
 
 【あなたの役割とルール】
 {agent_system_prompt}
 
-上記の議論を踏まえて、あなたの視点（{agent_role}）から
+上記の要約を踏まえて、あなたの視点（{agent_role}）から
 - 同意できる点／できない点
 - 追加で指摘すべき論点
 - 具体的な次の一手（あれば）
 を述べてください。自分の役割に沿ってコメントし、必要に応じて他エージェントの名前を挙げて構いません。`;
 }
 
+function buildAnalystPrompt(round, participantResponses, previousAnalystSummary) {
+  const digest = formatResponses(participantResponses);
+  const previous = (previousAnalystSummary || "").trim();
+  const previousBlock = previous
+    ? `\n【前ラウンドまでの要約】
+${previous}\n`
+    : "";
+
+  return `【あなたの役割とルール】
+{agent_system_prompt}
+
+【ラウンド${round}の各エージェント発言】
+${digest}
+${previousBlock}
+各エージェントの論点を統合し、共通点・相違点・論点の抜け漏れを整理してください。
+JUDGE が判断しやすいよう、役割ごとの差分も明確にしてください。`;
+}
+
 function buildSummaryPrompt(topic, rounds, judgeAgent) {
-  const digest = rounds
-    .map((round, index) => `ラウンド${index + 1}:
-${formatResponses(round)}`)
-    .join("\n\n");
+  const digest = formatRoundHistory(rounds);
 
   return `${judgeAgent.systemPrompt}
 
@@ -409,17 +649,44 @@ ${trimmed.slice(0, 800)}${trimmed.length > 800 ? "..." : ""}`;
     })
     .join("\n\n");
 }
-async function broadcastPrompt(template) {
+
+function formatRoundHistory(rounds) {
+  return (rounds || [])
+    .map((round, index) => {
+      const roundIndex = round?.round ?? index + 1;
+      const participantsDigest = formatResponses(round?.participants || {});
+      const analystBlock = (round?.analyst || "").trim()
+        ? `\n\n【ANALYST】
+${round.analyst.trim()}`
+        : "";
+      return `ラウンド${roundIndex}:
+${participantsDigest}${analystBlock}`;
+    })
+    .join("\n\n");
+}
+
+function renderTemplate(template, agent) {
+  if (typeof template === "function") {
+    return template(agent);
+  }
+  if (typeof template === "string") {
+    return template
+      .replace(/\{agent_role\}/g, agent.role)
+      .replace(/\{agent_system_prompt\}/g, agent.systemPrompt);
+  }
+  return "";
+}
+async function broadcastPrompt(template, agentList) {
   const results = {};
-  const participants = state.agentTabs.filter((agent) => agent.name !== "JUDGE");
+  const participants =
+    agentList && agentList.length
+      ? agentList
+      : state.agentTabs.filter((agent) => agent.name !== "JUDGE");
 
   await Promise.all(
     participants.map(async (agent) => {
       if (!state.running) return;
-
-      const prompt = template
-        .replace("{agent_role}", agent.role)
-        .replace("{agent_system_prompt}", agent.systemPrompt);
+      const prompt = renderTemplate(template, agent);
       try {
         const response = await sendPromptToAgent(agent, prompt);
         results[agent.name] = response.text;
@@ -579,6 +846,7 @@ function pushLog(message) {
   if (state.logs.length > MAX_LOG_ENTRIES) {
     state.logs.splice(0, state.logs.length - MAX_LOG_ENTRIES);
   }
+  scheduleStatePersist();
   notify({ type: "LOG", entry });
   console.log("[MAGI]", message);
 }
@@ -609,13 +877,16 @@ function getPublicState() {
     roundLogs: state.roundLogs,
     summary: state.summary,
     agents: state.agentTabs.map(({ name, tabId }) => ({ name, tabId })),
+    stopRequested: state.stopRequested,
   };
 }
 
 function notifyState() {
+  const publicState = getPublicState();
+  scheduleStatePersist();
   notify({
     type: "STATE_UPDATE",
-    state: getPublicState(),
+    state: publicState,
   });
 }
 
@@ -734,13 +1005,16 @@ async function temporarilyActivateTab(tabId, reason = "", fallbackContext = null
   try {
     const targetTab = await getTab(tabId);
     const previousContext = fallbackContext ?? (await getActiveContext());
+    const targetWindowId = targetTab?.windowId ?? null;
+    const isDedicatedWindow =
+      state.agentWindowId != null && targetWindowId === state.agentWindowId;
 
     if (reason) {
       pushLog(`タブ(${tabId})を一時的に前面表示します: ${reason}`);
     }
 
-    if (targetTab?.windowId != null) {
-      await prepareChromeCall(chrome.windows.update, targetTab.windowId, { focused: true });
+    if (targetWindowId != null) {
+      await prepareChromeCall(chrome.windows.update, targetWindowId, { focused: true });
     }
 
     await prepareChromeCall(chrome.tabs.update, tabId, { active: true });
@@ -757,7 +1031,184 @@ async function temporarilyActivateTab(tabId, reason = "", fallbackContext = null
       }
       await prepareChromeCall(chrome.tabs.update, previousContext.tabId, { active: true });
     }
+
+    if (isDedicatedWindow && targetWindowId != null) {
+      try {
+        await prepareChromeCall(chrome.windows.update, targetWindowId, { state: "minimized" });
+      } catch {
+        // ignore
+      }
+    }
   } catch (error) {
     pushLog(`タブ${tabId}のアクティブ化でエラー: ${error.message}`);
   }
 }
+
+async function ensureStateReady() {
+  if (!stateReadyPromise) {
+    return;
+  }
+  try {
+    await stateReadyPromise;
+  } catch (error) {
+    console.warn("MAGI state restoration failed:", error);
+  }
+}
+
+function resumeDiscussionFlow() {
+  if (!state.running) return;
+  if (activeWorkflowPromise) return;
+
+  runDiscussionWorkflow({ resume: true }).catch((error) => {
+    pushLog(`復元中にエラーが発生しました: ${error.message}`);
+    notify({ type: "DISCUSSION_ERROR", message: error.message });
+  });
+}
+
+async function restoreState() {
+  if (!STORAGE_AREA) {
+    return;
+  }
+  try {
+    const stored = await storageGet(STORAGE_AREA, STORAGE_KEY);
+    const snapshot = stored?.[STORAGE_KEY];
+    if (!snapshot) {
+      return;
+    }
+    applyStateSnapshot(snapshot);
+    notifyState();
+    if (state.running) {
+      resumeDiscussionFlow();
+    }
+  } catch (error) {
+    console.warn("MAGI state restore error:", error);
+  }
+}
+
+function applyStateSnapshot(snapshot) {
+  state.running = Boolean(snapshot.running);
+  state.topic = snapshot.topic ?? "";
+  state.plannedRounds = Number(snapshot.plannedRounds) || 3;
+  state.roundLogs = normalizeRoundLogs(snapshot.roundLogs);
+  state.summary = snapshot.summary ?? "";
+  state.logs = Array.isArray(snapshot.logs)
+    ? snapshot.logs.slice(-MAX_LOG_ENTRIES)
+    : [];
+  state.agentWindowId = snapshot.agentWindowId ?? null;
+  state.stopRequested = Boolean(snapshot.stopRequested);
+  state.agentTabs = hydrateAgentTabs(snapshot.agentTabs);
+}
+
+function hydrateAgentTabs(savedTabs) {
+  if (!Array.isArray(savedTabs)) {
+    return [];
+  }
+  return savedTabs
+    .map((entry) => {
+      if (!entry?.name || !entry?.tabId) {
+        return null;
+      }
+      const definition = AGENTS.find((agent) => agent.name === entry.name);
+      if (!definition) {
+        return null;
+      }
+      return { ...definition, tabId: entry.tabId };
+    })
+    .filter(Boolean);
+}
+
+function normalizeRoundLogs(rawRounds) {
+  if (!Array.isArray(rawRounds)) {
+    return [];
+  }
+  return rawRounds.map((entry, index) => {
+    if (entry && typeof entry === "object" && "participants" in entry) {
+      return {
+        round: entry.round ?? index + 1,
+        participants: entry.participants ?? {},
+        analyst: entry.analyst ?? "",
+      };
+    }
+
+    const participants = { ...(entry || {}) };
+    const analyst = participants.ANALYST ?? participants.analyst ?? "";
+    delete participants.ANALYST;
+    delete participants.analyst;
+
+    return {
+      round: index + 1,
+      participants,
+      analyst,
+    };
+  });
+}
+
+async function persistState() {
+  if (!STORAGE_AREA) {
+    return;
+  }
+  const snapshot = serializeState();
+  try {
+    await storageSet(STORAGE_AREA, { [STORAGE_KEY]: snapshot });
+  } catch (error) {
+    console.warn("MAGI state persist error:", error);
+  }
+}
+
+function serializeState() {
+  return {
+    running: state.running,
+    topic: state.topic,
+    plannedRounds: state.plannedRounds,
+    agentTabs: state.agentTabs.map(({ name, tabId }) => ({ name, tabId })),
+    agentWindowId: state.agentWindowId ?? null,
+    logs: state.logs,
+    roundLogs: state.roundLogs,
+    summary: state.summary,
+    stopRequested: state.stopRequested,
+  };
+}
+
+function scheduleStatePersist() {
+  if (!STORAGE_AREA) return;
+  if (persistTimerId != null) return;
+  persistTimerId = setTimeout(() => {
+    persistTimerId = null;
+    persistState();
+  }, STATE_PERSIST_DEBOUNCE_MS);
+}
+
+function storageGet(area, keys) {
+  return new Promise((resolve, reject) => {
+    try {
+      area.get(keys, (result) => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          reject(new Error(err.message));
+          return;
+        }
+        resolve(result);
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+
+function storageSet(area, items) {
+  return new Promise((resolve, reject) => {
+    try {
+      area.set(items, () => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          reject(new Error(err.message));
+          return;
+        }
+        resolve();
+      });
+    } catch (error) {
+      reject(error);
+    }
+  });
+}
+

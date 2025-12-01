@@ -123,6 +123,16 @@ section {
   margin-bottom: 6px;
 }
 
+.section-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.section-actions button {
+  padding: 6px 8px;
+  font-size: 0.75rem;
+}
+
 #log-view {
   height: 150px;
   overflow-y: auto;
@@ -140,5 +150,40 @@ section {
   font-size: 0.85rem;
   line-height: 1.5;
   white-space: pre-wrap;
+}
+
+.rounds-view {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.rounds-view details {
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  padding: 6px 8px;
+  background: rgba(0, 0, 0, 0.25);
+}
+
+.rounds-view summary {
+  cursor: pointer;
+  font-weight: 600;
+  font-size: 0.85rem;
+}
+
+.rounds-view h4 {
+  margin: 8px 0 4px;
+  font-size: 0.78rem;
+  color: #9fc8ff;
+}
+
+.rounds-view pre {
+  margin: 0 0 4px;
+  padding: 6px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.35);
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  line-height: 1.4;
 }
 

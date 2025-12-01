@@ -275,7 +275,7 @@ async function prepareAgentTabs() {
   await Promise.all(state.agentTabs.map((agent) => safeRemoveTab(agent.tabId)));
   state.agentTabs = [];
 
-  const originalActiveTabId = await getActiveTabId();
+  const originalContext = await getActiveContext();
 
   for (const agent of AGENTS) {
     if (!state.running) return;
@@ -283,7 +283,7 @@ async function prepareAgentTabs() {
     await configureTabForLongRunning(tab.id);
     await waitForTabComplete(tab.id);
     await ensureContentReady(tab.id);
-    await temporarilyActivateTab(tab.id, `初期表示 (${agent.name})`, originalActiveTabId);
+    await temporarilyActivateTab(tab.id, `初期表示 (${agent.name})`, originalContext);
     state.agentTabs.push({ ...agent, tabId: tab.id });
     pushLog(`【${agent.name}】 タブ準備完了 (tabId: ${tab.id})`);
   }
@@ -294,7 +294,8 @@ async function initializeAgents() {
     if (!state.running) return;
     try {
       await ensureTabAwake(agent, "初期化");
-      await temporarilyActivateTab(agent.tabId, `初期化 (${agent.name})`);
+      const context = await getActiveContext();
+      await temporarilyActivateTab(agent.tabId, `初期化 (${agent.name})`, context);
       const prompt = buildInitializationPrompt(agent);
       const response = await sendPromptToAgent(agent, prompt);
       const text = response?.text || "";
@@ -671,29 +672,47 @@ async function ensureTabAwake(agent, context) {
   }
 }
 
-async function getActiveTabId() {
+async function getActiveContext() {
   try {
     const tabs = await prepareChromeCall(chrome.tabs.query, {
       active: true,
-      currentWindow: true,
+      lastFocusedWindow: true,
     });
-    return tabs?.[0]?.id ?? null;
+    const tab = tabs?.[0];
+    if (!tab) return { tabId: null, windowId: null };
+    return { tabId: tab.id ?? null, windowId: tab.windowId ?? null };
   } catch {
-    return null;
+    return { tabId: null, windowId: null };
   }
 }
 
-async function temporarilyActivateTab(tabId, reason = "", preferredReturnTabId = null) {
+async function temporarilyActivateTab(tabId, reason = "", fallbackContext = null) {
   if (!tabId) return;
   try {
-    const previous = preferredReturnTabId ?? (await getActiveTabId());
+    const targetTab = await getTab(tabId);
+    const previousContext = fallbackContext ?? (await getActiveContext());
+
     if (reason) {
       pushLog(`タブ(${tabId})を一時的に前面表示します: ${reason}`);
     }
+
+    if (targetTab?.windowId != null) {
+      await prepareChromeCall(chrome.windows.update, targetTab.windowId, { focused: true });
+    }
+
     await prepareChromeCall(chrome.tabs.update, tabId, { active: true });
     await delay(TAB_ACTIVATION_DURATION_MS);
-    if (previous && previous !== tabId) {
-      await prepareChromeCall(chrome.tabs.update, previous, { active: true });
+
+    if (
+      previousContext?.tabId &&
+      previousContext.tabId !== tabId
+    ) {
+      if (previousContext.windowId != null) {
+        await prepareChromeCall(chrome.windows.update, previousContext.windowId, {
+          focused: true,
+        });
+      }
+      await prepareChromeCall(chrome.tabs.update, previousContext.tabId, { active: true });
     }
   } catch (error) {
     pushLog(`タブ${tabId}のアクティブ化でエラー: ${error.message}`);

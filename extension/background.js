@@ -419,24 +419,28 @@ async function prepareAgentTabs({ reuseExisting = false } = {}) {
     await disposeAgentTabs();
   }
 
-  const preparedTabs = [];
+  const tasks = AGENTS.map(async (agent) => {
+    if (!state.running) return null;
 
-  for (const agent of AGENTS) {
-    if (!state.running) break;
-
-    let tabEntry = null;
     if (reuseExisting) {
-      tabEntry = await reviveExistingAgentTab(agent);
+      const existing = await reviveExistingAgentTab(agent);
+      if (existing) {
+        pushLog(`【${agent.name}】 既存タブを再利用します (tabId: ${existing.tabId})`);
+        return existing;
+      }
     }
 
-    if (!tabEntry) {
-      tabEntry = await openAgentTab(agent, originalContext);
-    } else {
-      pushLog(`【${agent.name}】 既存タブを再利用します (tabId: ${tabEntry.tabId})`);
-    }
+    if (!state.running) return null;
 
-    preparedTabs.push(tabEntry);
-  }
+    try {
+      return await openAgentTab(agent, originalContext);
+    } catch (error) {
+      pushLog(`【${agent.name}】 タブ準備に失敗しました: ${error.message}`);
+      return null;
+    }
+  });
+
+  const preparedTabs = (await Promise.all(tasks)).filter(Boolean);
 
   state.agentTabs = preparedTabs;
   notifyState();

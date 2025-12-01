@@ -74,7 +74,9 @@ chrome.runtime.onMessage.addListener((message) => {
   }
 });
 
-await refreshState();
+refreshState().catch((error) => {
+  appendLog(`状態取得に失敗しました: ${error.message}`);
+});
 
 function appendLog(text) {
   const current = logView.textContent?.trim();
@@ -127,13 +129,9 @@ function formatLogEntry(entry) {
 }
 
 async function refreshState() {
-  try {
-    const response = await sendRuntimeMessage({ type: "GET_STATE" });
-    if (response?.state) {
-      renderState(response.state);
-    }
-  } catch (error) {
-    appendLog(`状態取得に失敗しました: ${error.message}`);
+  const response = await sendRuntimeMessage({ type: "GET_STATE" });
+  if (response?.state) {
+    renderState(response.state);
   }
 }
 

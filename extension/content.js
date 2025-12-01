@@ -11,6 +11,8 @@ const COMPOSER_SELECTORS = [
   "form textarea",
 ];
 
+let isBusy = false;
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "PING") {
     sendResponse({ status: "ok" });
@@ -18,9 +20,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message?.type === "SEND_PROMPT") {
+    if (isBusy) {
+      sendResponse({
+        status: "error",
+        error: "このタブは前のプロンプトを処理中です。しばらく待ってください。",
+      });
+      return;
+    }
+
+    isBusy = true;
     handleSendPrompt(message)
       .then((data) => sendResponse({ status: "ok", data }))
-      .catch((error) => sendResponse({ status: "error", error: error.message }));
+      .catch((error) => sendResponse({ status: "error", error: error.message }))
+      .finally(() => {
+        isBusy = false;
+      });
     return true;
   }
 

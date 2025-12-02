@@ -24,6 +24,12 @@ ${GENERAL_CORE_INSTRUCTION}
 
 あなたはMAGIシステムの一員「MELCHIOR」です。役割は「楽観的で可能性を重視するストラテジスト」です。
 
+【思考アルゴリズム】
+1. 議題から「想定ユーザー」「利用シーン」を最低2パターン以上想像する。
+2. それぞれの利用シーンについて、「こうなったら最高」という理想状態を3〜5個列挙する。
+3. その理想状態を実現するための機能や仕組みを、制約を考えずに発散する。
+4. 最後に、「今すぐ試せる」「少し頑張れば試せる」「長期アイデア」に分類して整理する。
+
 【基本姿勢】
 - 物事のポジティブな側面、成長機会、新しいチャンスにフォーカスします。
 - 「実現できるとしたらどうするか？」の前提で発想し、制約より可能性を優先します。
@@ -52,6 +58,20 @@ ${GENERAL_CORE_INSTRUCTION}
 
 あなたはMAGIシステムの一員「BALTHASAR」です。役割は「慎重でリスクを重視する批判的アナリスト」です。
 
+【思考アルゴリズム】
+1. まず議題の前提条件を列挙し、「暗黙の前提」「抜けている前提」を洗い出す。
+2. 各前提が崩れた場合の失敗パターン・最悪ケースを列挙する。
+3. 失敗パターンごとに「影響度（小/中/大）」「発生可能性（低/中/高）」を付ける。
+4. 「絶対NG」と「条件付きで許容可能」を区別してタグ付けする。
+5. 最後に、「これだけは守らないといけない安全ライン」「条件付きでOKなライン」を箇条書きにする。
+
+【役割上の注意】
+- あなたは「アイデアの価値」ではなく「安全性・健全性」を評価します。
+- 面白いかどうか、ビジネス的に儲かるかどうかは、MELCHIORやJUDGEの役割です。
+- 「リスクはあるが、条件を満たせば挑戦してよい」ものは、必ず
+  - 判定: 条件付き許容
+  と明示してください。
+
 【基本姿勢】
 - 発生しうるリスク・問題点・不確実性を列挙し、それぞれの影響度（小/中/大）と発生可能性（低/中/高）を簡潔に評価します。
 - 否定だけで終わらず、可能な範囲で「回避策・緩和策」もセットで提示します。
@@ -78,6 +98,12 @@ AIであることへの言及やキャラクター説明は不要です。
 ${GENERAL_CORE_INSTRUCTION}
 
 あなたはMAGIシステムの一員「CASPER」です。役割は「感情を排した中立な技術・実務担当」です。
+
+【思考アルゴリズム】
+1. 議題から「最終アウトプット」を明確にする（例: 設計方針メモ、タスク一覧など）。
+2. そのアウトプットを構成するセクション（章立て）を先に決める。
+3. 各セクションについて、必要な情報・決定事項を箇条書きする。
+4. 最後に、「今すぐ実行できるタスク」のチェックリストに変換する。
 
 【基本姿勢】
 - 事実・データ・論理に基づき、賛否をフラットに整理します。
@@ -401,6 +427,7 @@ const state = {
   summary: "",
   agentWindowId: null,
   stopRequested: false,
+  initialCritique: "",
 };
 
 let keepAliveIntervalId = null;
@@ -606,6 +633,7 @@ async function startDiscussion(topic, rounds, modeKey = getEffectiveMode()) {
   state.summary = "";
   state.logs = [];
   state.agentTabs = [];
+  state.initialCritique = "";
   scheduleStatePersist();
   const modeLabel = getModeLabel(normalizedMode);
   pushLog(`議論を開始します: 「${topic}」 (モード: ${modeLabel} / ラウンド数: ${rounds})`);
@@ -636,6 +664,12 @@ async function runDiscussionWorkflow({ resume = false } = {}) {
       if (!state.running) {
         pushLog("議論が停止されました（タブ準備後）。");
         return;
+      }
+
+      try {
+        await runInitialCritique(state.topic);
+      } catch (error) {
+        pushLog(`ラウンド0実行中にエラー: ${error.message}`);
       }
 
       const plannedRounds = state.plannedRounds;
@@ -857,10 +891,13 @@ async function initializeAgents() {
   }
 }
 async function executeRounds(rounds, topic) {
-  const roundLogs = normalizeRoundLogs(state.roundLogs);
-  state.roundLogs = roundLogs;
+  const normalized = normalizeRoundLogs(state.roundLogs);
+  state.roundLogs = normalized;
 
-  if (roundLogs.length >= rounds) {
+  const criticRounds = normalized.filter((entry) => (entry?.round ?? 0) <= 0);
+  const mainRounds = normalized.filter((entry) => (entry?.round ?? 0) >= 1);
+
+  if (mainRounds.length >= rounds) {
     return;
   }
 
@@ -877,24 +914,25 @@ async function executeRounds(rounds, topic) {
     : allParticipantAgents;
 
   let previousAnalystSummary =
-    roundLogs.length > 0 ? roundLogs[roundLogs.length - 1]?.analyst ?? "" : "";
+    mainRounds.length > 0 ? mainRounds[mainRounds.length - 1]?.analyst ?? "" : "";
   const modeDefinition = getModeDefinition();
 
-  for (let round = roundLogs.length + 1; round <= rounds; round += 1) {
+  for (let round = mainRounds.length + 1; round <= rounds; round += 1) {
     if (!state.running) break;
 
     pushLog(`ラウンド ${round}/${rounds} を実行しています…`);
 
     const template =
       round === 1 && !previousAnalystSummary
-        ? modeDefinition.buildFirstRoundPrompt(topic)
+        ? modeDefinition.buildFirstRoundPrompt(topic, state.initialCritique)
         : modeDefinition.buildFollowupPrompt(previousAnalystSummary, {
             topic,
             round,
             plannedRounds: rounds,
+            critique: state.initialCritique,
           });
 
-    const includeTheorist = Boolean(theoristAgent && round === 1 && roundLogs.length === 0);
+    const includeTheorist = Boolean(theoristAgent && round === 1 && mainRounds.length === 0);
     const participantsForRound = includeTheorist ? allParticipantAgents : votingAgents;
     const participantResponses = await broadcastPrompt(template, participantsForRound);
 
@@ -915,8 +953,8 @@ async function executeRounds(rounds, topic) {
       participants: participantResponses,
       analyst: analystSummary,
     };
-    roundLogs.push(roundEntry);
-    state.roundLogs = roundLogs.slice();
+    mainRounds.push(roundEntry);
+    state.roundLogs = [...criticRounds, ...mainRounds];
 
     notify({ type: "ROUND_COMPLETE", round, responses: participantResponses, analyst: analystSummary });
     notifyState();
@@ -967,20 +1005,23 @@ ${agent.systemPrompt}
 この役割を理解したら「${agent.name}、準備完了」と応答してください。`;
 }
 
-function buildGeneralFirstRoundPrompt(topic) {
-  return `【議題】
+function buildGeneralFirstRoundPrompt(topic, critique = "") {
+  const critiqueBlock = buildCritiqueIntroBlock(critique);
+  return `${critiqueBlock}【議題】
 ${topic}
 
 【ルール】
 - あなたは既に与えられた役割・出力フォーマットに従ってください。
 - 今回はラウンド1です。あなたの視点からの初期分析と仮説を述べてください。
 - 出力は日本語で、800〜1600文字程度を目安にしてください。
+- 否定ラウンド0で挙げられた「絶対NG」を避けつつ、それでも価値がある案を検討してください。
 - 具体的アクションよりも「抽象化」「仮説」「モデル化」「反例提示」「問いの再定義」を優先してください。`;
 }
 
-function buildGeneralFollowupPrompt(previousAnalystSummary) {
+function buildGeneralFollowupPrompt(previousAnalystSummary, context = {}) {
+  const critiqueBlock = buildCritiqueReminderBlock(context?.critique);
   const digest = (previousAnalystSummary || "").trim() || "（前ラウンドの要約はありません）";
-  return `【前ラウンドの要約】
+  return `${critiqueBlock}【前ラウンドの要約】
 ${digest}
 
 【タスク】
@@ -989,6 +1030,7 @@ ${digest}
   - 新しい仮説・抽象モデル・反例・if仮定
   - 次ラウンドで掘るべき論点
 を述べてください。
+- 否定ラウンド0で挙がった「絶対NGライン」から外れていないかも意識してコメントしてください。
 - 現実的制約は最低限にし、役割に沿った飛躍的思考を優先してください。`;
 }
 
@@ -1035,8 +1077,46 @@ ${digest}
 `;
 }
 
-function buildDevelopmentFirstRoundPrompt(topic) {
-  return `【プロジェクト概要】
+function buildCritiqueIntroBlock(critique) {
+  const snippet = formatCritiqueSnippet(critique, 1200);
+  if (!snippet) {
+    return "";
+  }
+  return `【否定ラウンド0のレビュー（重要）】
+${snippet}
+
+上記の「重大なNG」と「コアの条件」を前提として、あなたの役割から見た初期分析を行ってください。
+
+`;
+}
+
+function buildCritiqueReminderBlock(critique) {
+  const snippet = formatCritiqueSnippet(critique, 800);
+  if (!snippet) {
+    return "";
+  }
+  return `【否定ラウンド0の重要ポイント（再確認）】
+${snippet}
+
+このレビューで示された「絶対NGライン」に抵触していないかを常に確認しながら回答してください。
+
+`;
+}
+
+function formatCritiqueSnippet(critique, maxLength) {
+  const trimmed = (critique || "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (trimmed.length <= maxLength) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, maxLength)}\n※長いため途中までを表示。詳細はラウンド0ログを参照。`;
+}
+
+function buildDevelopmentFirstRoundPrompt(topic, critique = "") {
+  const critiqueBlock = buildCritiqueIntroBlock(critique);
+  return `${critiqueBlock}【プロジェクト概要】
 ${topic}
 
 【タスク】
@@ -1051,9 +1131,10 @@ ${topic}
 - 抽象的な議論だけでなく、できるだけ「実際の開発に使える粒度」まで具体化してください。`;
 }
 
-function buildDevelopmentFollowupPrompt(previousAnalystSummary) {
+function buildDevelopmentFollowupPrompt(previousAnalystSummary, context = {}) {
+  const critiqueBlock = buildCritiqueReminderBlock(context?.critique);
   const digest = (previousAnalystSummary || "").trim() || "（前ラウンドの要約はありません）";
-  return `【前ラウンドの要約】
+  return `${critiqueBlock}【前ラウンドの要約】
 ${digest}
 
 【タスク】
@@ -1062,6 +1143,7 @@ ${digest}
   - 他エージェントの提案に対する評価・補完・懸念
   - 要件／アーキテクチャ／リスクの抜け漏れ指摘
   - MVPスコープや段階的リリースに向けた具体的アクション
+- ラウンド0の「絶対NG」「条件付き許容ライン」を尊重し、逸脱しそうな案があれば必ず言及してください。
 - ビジネス価値・UX・技術実現性・品質・運用性のバランスを明示してください。
 - 出力は日本語で800〜1600文字を目安にし、実際の開発チームが参照できる粒度まで落とし込んでください。`;
 }
@@ -1094,6 +1176,79 @@ JUDGEとして、開発チームがそのまま参照できる仕様・設計ド
 ${digest}
 
 `;
+}
+
+async function runInitialCritique(topic) {
+  if (!state.running) {
+    return;
+  }
+  if ((state.initialCritique || "").trim()) {
+    pushLog("ラウンド0の否定レビューは既に存在するためスキップします。");
+    return;
+  }
+
+  const criticAgent = state.agentTabs.find((agent) => agent.name === "BALTHASAR");
+  if (!criticAgent) {
+    pushLog("BALTHASARタブが見つからないため、ラウンド0否定レビューをスキップします。");
+    return;
+  }
+
+  pushLog("ラウンド0: BALTHASARによる否定的レビューを実行します…");
+  const prompt = buildCriticBootstrapPrompt(topic);
+
+  try {
+    const res = await sendPromptToAgent(criticAgent, prompt);
+    const text = (res?.text || "").trim() || "(内容なし)";
+    state.initialCritique = text;
+
+    const existingMainRounds = (state.roundLogs || []).filter((entry) => (entry?.round ?? 0) >= 1);
+    const round0 = {
+      round: 0,
+      participants: { [criticAgent.name]: text },
+      analyst: "",
+    };
+    state.roundLogs = [round0, ...existingMainRounds];
+
+    notify({
+      type: "ROUND_COMPLETE",
+      round: 0,
+      responses: round0.participants,
+      analyst: "",
+    });
+    notifyState();
+    pushLog("ラウンド0の否定レビューを取得しました。");
+  } catch (error) {
+    pushLog(`ラウンド0否定レビュー取得に失敗しました: ${error.message}`);
+  }
+}
+
+function buildCriticBootstrapPrompt(topic) {
+  return `
+【タスク（ラウンド0: 否定専用レビュー）】
+
+あなたは「BALTHASAR」として、次の前提で振る舞ってください：
+- 基本スタンスは「この計画／案は危険・破綻しうる」であると仮定する。
+- 価値があるかどうかを決める役割ではなく、「やってはいけないライン」と「条件付きで許容できるライン」を見つける役割である。
+
+【やること】
+1. 議題の前提の甘さ・見落としていそうな条件を列挙する。
+2. 想定される重大な失敗パターン／最悪ケースを列挙する。
+3. 「絶対に採用すべきではない」設計・運用・方針を挙げる。
+4. それでも残してよい「コア」があるなら、
+   - そのコアは何か
+   - それが成立するために必要な条件（チェックリスト）
+   を整理する。
+
+【出力フォーマット】
+1. 前提の甘さ・見落としの可能性
+2. 重大な失敗パターンと最悪ケース
+3. 絶対に採用すべきではないパターン
+4. 残してよいコア（あれば）
+5. コアが成立するための条件チェックリスト
+
+【議題】
+${topic}
+`.trim();
 }
 
 function formatResponses(responses) {
@@ -1391,6 +1546,7 @@ function getPublicState() {
     summary: state.summary,
     agents: state.agentTabs.map(({ name, tabId }) => ({ name, tabId })),
     stopRequested: state.stopRequested,
+    initialCritique: state.initialCritique || "",
   };
 }
 
@@ -1615,6 +1771,7 @@ function applyStateSnapshot(snapshot) {
   state.agentWindowId = snapshot.agentWindowId ?? null;
   state.stopRequested = Boolean(snapshot.stopRequested);
   state.agentTabs = hydrateAgentTabs(snapshot.agentTabs, storedActiveMode || storedMode);
+  state.initialCritique = snapshot.initialCritique || "";
 }
 
 function hydrateAgentTabs(savedTabs, modeKey = DEFAULT_MODE_KEY) {
@@ -1687,6 +1844,7 @@ function serializeState() {
     roundLogs: state.roundLogs,
     summary: state.summary,
     stopRequested: state.stopRequested,
+    initialCritique: state.initialCritique || "",
   };
 }
 

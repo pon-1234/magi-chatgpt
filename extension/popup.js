@@ -304,3 +304,42 @@ function timestamp() {
   });
 }
 
+// URLパラメータで自動実行（DOMの準備状況に依らず実行）
+function autoSubmitFromUrlParams() {
+  try {
+    const params = new URLSearchParams(window.location.search);
+    const topicParam = params.get("topic");
+    const roundsParam = params.get("rounds");
+
+    if (!topicParam?.trim()) {
+      return; // 通常の手動入力モード
+    }
+
+    const topicValue = topicParam.trim();
+
+    // フォームに値を入れる
+    topicInput.value = topicValue;
+    if (roundsParam) {
+      const n = Number(roundsParam);
+      if (Number.isFinite(n) && n > 0 && n <= 10) {
+        roundsInput.value = String(n);
+      }
+    }
+
+    // ログに一言
+    appendLog(`🛰 リモートコマンドを受信: 「${topicValue}」`);
+
+    // 自動でフォーム送信 → START_DISCUSSION メッセージが飛ぶ
+    form.requestSubmit();
+  } catch (error) {
+    console.error("URLパラメータ処理エラー:", error);
+    appendLog("⚠️ URLパラメータ処理に失敗しました。");
+  }
+}
+
+if (document.readyState === "loading") {
+  window.addEventListener("DOMContentLoaded", autoSubmitFromUrlParams);
+} else {
+  autoSubmitFromUrlParams();
+}
+

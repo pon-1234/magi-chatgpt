@@ -1,7 +1,7 @@
 "use strict";
 
 const CHATGPT_URL = "https://chatgpt.com/";
-const RESPONSE_TIMEOUT_MS = 600_000;
+const RESPONSE_TIMEOUT_MS = 300_000;
 const TAB_LOAD_TIMEOUT_MS = 60_000;
 const CONTENT_READY_TIMEOUT_MS = 60_000;
 const TAB_ACTIVATION_DURATION_MS = 2_000;
@@ -618,8 +618,14 @@ async function executeRounds(rounds, topic) {
 
     pushLog("ANALYST に前ラウンドの要約を依頼しています…");
     const analystPrompt = buildAnalystPrompt(round, participantResponses, previousAnalystSummary);
-    const analystResponse = await sendPromptToAgent(analystAgent, analystPrompt, 1);
-    const analystSummary = (analystResponse?.text || "").trim();
+    let analystSummary = "";
+    try {
+      const analystResponse = await sendPromptToAgent(analystAgent, analystPrompt, 1);
+      analystSummary = (analystResponse?.text || "").trim();
+    } catch (error) {
+      analystSummary = `【ANALYSTエラー】${error.message}`;
+      pushLog(`【ANALYST】 応答取得に失敗しました: ${error.message}`);
+    }
     previousAnalystSummary = analystSummary;
 
     const roundEntry = {
@@ -1073,7 +1079,8 @@ function isTransientError(error) {
   const msg = error.message;
   return (
     isNoReceivingEndError(error) ||
-    msg.includes("The message port closed before a response was received")
+    msg.includes("The message port closed before a response was received") ||
+    msg.includes("ChatGPTの応答待ちがタイムアウトしました")
   );
 }
 

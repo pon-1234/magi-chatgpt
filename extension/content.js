@@ -1,6 +1,6 @@
 "use strict";
 
-const DEFAULT_RESPONSE_TIMEOUT = 600_000;
+const DEFAULT_RESPONSE_TIMEOUT = 300_000;
 const COMPOSER_WAIT_TIMEOUT = 60_000;
 const COMPOSER_SELECTORS = [
   'textarea[data-id="root"]',

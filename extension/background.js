@@ -131,9 +131,9 @@ ${GLOBAL_CORE_INSTRUCTION}
 あなたはMAGIシステムの一員「ANALYST」です。役割は「各エージェントの意見を統合し、論点を構造化するファシリテーター」です。
 
 【基本姿勢】
-- MELCHIOR / BALTHASAR / CASPER / THEORIST の発言を読み、共通点・相違点・見落としを整理します。
+- MELCHIOR / BALTHASAR / CASPER（ラウンド1のみ THEORIST を含む）の発言を読み、共通点・相違点・見落としを整理します。
 - 自分の意見を増やしすぎず、メタ視点から整理・再構成することを主とします。
-- あなたの入力は毎ラウンドの4エージェント発言（＋必要があれば前回要約）です。そこから論点を圧縮し、次ラウンドに渡す集約役です。
+- あなたの入力は毎ラウンドの3エージェント発言（ラウンド1のみ +THEORIST、＋必要があれば前回要約）です。そこから論点を圧縮し、次ラウンドに渡す集約役です。
 
 【ラウンド別のふるまい】
 - プロンプト本文に「【前ラウンドの議論】」という見出しが含まれていなければ、前ラウンド情報が無い（ラウンド1）とみなしてください。
@@ -142,7 +142,7 @@ ${GLOBAL_CORE_INSTRUCTION}
 
 【出力フォーマット】
 以下の番号付き見出しをこの順に用い、各見出し直後の行から本文を記述してください。
-1. MELCHIOR / BALTHASAR / CASPER / THEORIST の要約
+1. MELCHIOR / BALTHASAR / CASPER（ラウンド1のみ THEORIST を含めたまとめ）の要約
 2. 合意点
 3. 相違点・争点
 4. 追加で検討すべき論点
@@ -160,7 +160,7 @@ ${GLOBAL_CORE_INSTRUCTION}
 あなたはMAGIシステムの一員「JUDGE」です。役割は「全ての議論を踏まえて、バランスの取れた最終結論と提案を出す意思決定者」です。
 
 【基本姿勢】
-- MELCHIOR / BALTHASAR / CASPER / THEORIST / ANALYST の視点を踏まえ、現実的でバランスの良い方針を1つ以上提示します。
+- MELCHIOR / BALTHASAR / CASPER / ANALYST（THEORISTの初回フレームも参照）の視点を踏まえ、現実的でバランスの良い方針を1つ以上提示します。
 - 必要に応じて「推奨案A」「代替案B」を示し、どの条件ならどちらを選ぶべきかも説明します。
 - 結論だけでなく、その判断に至った根拠を簡潔に示します。
 
@@ -587,13 +587,17 @@ async function executeRounds(rounds, topic) {
     return;
   }
 
-  const participantAgents = state.agentTabs.filter(
+  const allParticipantAgents = state.agentTabs.filter(
     (agent) => agent.name !== "ANALYST" && agent.name !== "JUDGE"
   );
   const analystAgent = state.agentTabs.find((agent) => agent.name === "ANALYST");
   if (!analystAgent) {
     throw new Error("ANALYSTタブが見つかりませんでした。");
   }
+  const theoristAgent = allParticipantAgents.find((agent) => agent.name === "THEORIST");
+  const votingAgents = theoristAgent
+    ? allParticipantAgents.filter((agent) => agent.name !== "THEORIST")
+    : allParticipantAgents;
 
   let previousAnalystSummary =
     roundLogs.length > 0 ? roundLogs[roundLogs.length - 1]?.analyst ?? "" : "";
@@ -608,7 +612,9 @@ async function executeRounds(rounds, topic) {
         ? buildFirstRoundPrompt(topic)
         : buildFollowupPrompt(previousAnalystSummary);
 
-    const participantResponses = await broadcastPrompt(template, participantAgents);
+    const includeTheorist = Boolean(theoristAgent && round === 1 && roundLogs.length === 0);
+    const participantsForRound = includeTheorist ? allParticipantAgents : votingAgents;
+    const participantResponses = await broadcastPrompt(template, participantsForRound);
 
     pushLog("ANALYST に前ラウンドの要約を依頼しています…");
     const analystPrompt = buildAnalystPrompt(round, participantResponses, previousAnalystSummary);

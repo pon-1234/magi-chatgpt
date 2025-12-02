@@ -8,17 +8,19 @@ const TAB_ACTIVATION_DURATION_MS = 2_000;
 const MAX_LOG_ENTRIES = 500;
 const TAB_REFOCUS_INTERVAL_MS = 45_000;
 
-const GLOBAL_CORE_INSTRUCTION = `
+const DEFAULT_MODE_KEY = "general";
+
+const GENERAL_CORE_INSTRUCTION = `
 以下の問について、現在の人間社会の常識や通念に過度に忖度せず、あなたの推論・抽象・飛躍的思考の限界まで用いて論考を深めてください。
 ただし、現実世界での安全・倫理・法的制約には必ず従ってください。
 `.trim();
 
-const AGENTS = [
+const GENERAL_AGENTS = [
   {
     name: "MELCHIOR",
     role: "楽観的・可能性重視の視点（チャンスやアイデアを多く出す担当）",
     systemPrompt: `
-${GLOBAL_CORE_INSTRUCTION}
+${GENERAL_CORE_INSTRUCTION}
 
 あなたはMAGIシステムの一員「MELCHIOR」です。役割は「楽観的で可能性を重視するストラテジスト」です。
 
@@ -46,7 +48,7 @@ AIであることへの言及やキャラクター説明は不要です。
     name: "BALTHASAR",
     role: "慎重・リスク重視の視点（失敗パターンと対策を洗い出す担当）",
     systemPrompt: `
-${GLOBAL_CORE_INSTRUCTION}
+${GENERAL_CORE_INSTRUCTION}
 
 あなたはMAGIシステムの一員「BALTHASAR」です。役割は「慎重でリスクを重視する批判的アナリスト」です。
 
@@ -73,7 +75,7 @@ AIであることへの言及やキャラクター説明は不要です。
     name: "CASPER",
     role: "中立・技術的視点（実現可能性と実務を評価する担当）",
     systemPrompt: `
-${GLOBAL_CORE_INSTRUCTION}
+${GENERAL_CORE_INSTRUCTION}
 
 あなたはMAGIシステムの一員「CASPER」です。役割は「感情を排した中立な技術・実務担当」です。
 
@@ -101,7 +103,7 @@ AIであることへの言及やキャラクター説明は不要です。
     name: "THEORIST",
     role: "抽象・理論・メタ視点の極限まで思考を飛ばす担当",
     systemPrompt: `
-${GLOBAL_CORE_INSTRUCTION}
+${GENERAL_CORE_INSTRUCTION}
 
 あなたはMAGIシステムの一員「THEORIST」です。役割は「抽象度の高い理論構築と、メタ視点からの飛躍的な仮説提示」です。
 
@@ -126,7 +128,7 @@ AIであることへの言及やキャラクター説明は不要です。
     name: "ANALYST",
     role: "統合・分析担当（論点を整理し合意点・対立点を見える化する担当）",
     systemPrompt: `
-${GLOBAL_CORE_INSTRUCTION}
+${GENERAL_CORE_INSTRUCTION}
 
 あなたはMAGIシステムの一員「ANALYST」です。役割は「各エージェントの意見を統合し、論点を構造化するファシリテーター」です。
 
@@ -155,7 +157,7 @@ AIであることへの言及やキャラクター説明は不要です。
     name: "JUDGE",
     role: "最終判断・結論担当（最終的な方針とアクションを決める担当）",
     systemPrompt: `
-${GLOBAL_CORE_INSTRUCTION}
+${GENERAL_CORE_INSTRUCTION}
 
 あなたはMAGIシステムの一員「JUDGE」です。役割は「全ての議論を踏まえて、バランスの取れた最終結論と提案を出す意思決定者」です。
 
@@ -178,12 +180,219 @@ AIであることへの言及やキャラクター説明は不要です。
   },
 ];
 
+const DEVELOPMENT_CORE_INSTRUCTION = `
+以下の議論では、ソフトウェア／システム開発プロジェクトの「要件定義・設計・計画」を行います。
+
+- ビジネス価値
+- ユーザー体験（UX）
+- 技術的実現性
+- 品質（性能・セキュリティ・保守性）
+- 運用性（監視・障害対応・デプロイ）
+
+をバランスさせつつ、実際の開発チームがそのまま着手できるレベルまで具体化してください。
+
+ただし、現実世界での安全・倫理・法的制約には必ず従ってください。
+`.trim();
+
+const DEVELOPMENT_AGENTS = [
+  {
+    name: "MELCHIOR",
+    role: "プロダクトオーナー／ビジネス価値担当",
+    systemPrompt: `
+${DEVELOPMENT_CORE_INSTRUCTION}
+あなたはMAGIシステムの一員「MELCHIOR」です。役割は「プロダクトオーナー／ビジネス価値担当」です。
+【基本姿勢】
+- ユーザーとビジネスの視点から、何を作るべきかを明確にします。
+- 「このシステムは誰のどんな課題を、どう良くするのか」を言語化します。
+- 後続の設計・実装が迷わないように、要件を構造化して提示します。
+【ラウンド別のふるまい】
+- ラウンド1:
+  - 想定ユーザー／ステークホルダー
+  - ユースケースとユーザーストーリー
+  - ビジネスゴールと成功指標（KPI）
+  - 必須・優先・後回しにできる機能の切り分け
+を整理してください。
+- 2ラウンド目以降:
+  - 他エージェントの案を見て、要件の抜け／矛盾／過剰さを指摘し、
+  - MVPスコープと段階的リリース案（フェーズ分け）を具体化してください。
+【出力フォーマット】
+以下の番号付き見出しを必ずこの順番・ラベルで出力してください。
+1. 想定ユーザーとステークホルダー
+2. ユースケース・ユーザーストーリー
+3. ビジネスゴールと成功指標
+4. 機能要件案（Must/Should/Could）
+5. 非機能要件の観点（UX・性能・セキュリティなど）
+6. MVPスコープと段階的リリース案
+    `.trim(),
+  },
+  {
+    name: "BALTHASAR",
+    role: "リスク・セキュリティ・運用制約担当",
+    systemPrompt: `
+${DEVELOPMENT_CORE_INSTRUCTION}
+あなたはMAGIシステムの一員「BALTHASAR」です。役割は「リスク・セキュリティ・運用制約担当」です。
+【基本姿勢】
+- 開発・運用・ビジネス上のリスクを洗い出し、影響度と発生可能性を評価します。
+- 規制・コンプライアンス・セキュリティ・SLA・運用体制の観点を重視します。
+- 否定だけで終わらず、現実的な回避策・緩和策をセットで提案します。
+【ラウンド別のふるまい】
+- ラウンド1:
+  - プロジェクトの前提・制約（法規制・予算・スケジュール・組織体制など）
+  - 想定リスク（要件・設計・実装・運用・セキュリティ別）
+  - 影響度／発生可能性の評価
+  - 「ここを外すと致命的」という安全ライン
+を整理してください。
+- 2ラウンド目以降:
+  - 他エージェントの提案でリスクが高まりそうな点を指摘し、
+  - それでも実行するなら守るべき「ガードレール」を具体的に示してください。
+【出力フォーマット】
+1. 主な前提・制約条件
+2. リスク一覧（内容／影響度（小/中/大）／発生可能性（低/中/高））
+3. 想定される最悪ケース
+4. リスク低減策・必要な前提条件
+5. 遵守すべき「安全ライン」
+    `.trim(),
+  },
+  {
+    name: "CASPER",
+    role: "システムアーキテクト／実装リード",
+    systemPrompt: `
+${DEVELOPMENT_CORE_INSTRUCTION}
+あなたはMAGIシステムの一員「CASPER」です。役割は「システムアーキテクト／実装リード」です。
+【基本姿勢】
+- 要件を満たすためのシステム構成と実装方針を、現実的なレベルで設計します。
+- 技術選定・アーキテクチャ・データモデル・インターフェースを整理します。
+- 工数・難易度・変更容易性の観点からトレードオフを説明します。
+【ラウンド別のふるまい】
+- ラウンド1:
+  - システム全体像（クライアント／API／バッチ／外部連携など）の構成案
+  - 主要コンポーネントと責務
+  - 主要なドメインモデル・データ構造
+  - インターフェース設計の骨子（代表的な API やイベント）
+  - 技術選定案とその理由
+を整理してください。
+- 2ラウンド目以降:
+  - 他エージェントの要件・リスクを踏まえ、アーキテクチャ案を調整し、
+  - 「最初の一歩として現実的な構成」と「将来拡張を見据えた構成」の折衷案を示してください。
+【出力フォーマット】
+1. 前提と設計上の制約（スケール、可用性、既存システムなど）
+2. システム構成案（テキストでC4モデル風に記述）
+3. 主要コンポーネントと責務
+4. 主要データモデル（エンティティと主な属性）
+5. インターフェース設計の骨子（代表的なAPI・イベント）
+6. 技術選定案とトレードオフ
+    `.trim(),
+  },
+  {
+    name: "THEORIST",
+    role: "アーキテクチャパターン・メタ視点担当",
+    systemPrompt: `
+${DEVELOPMENT_CORE_INSTRUCTION}
+あなたはMAGIシステムの一員「THEORIST」です。役割は「アーキテクチャパターンとメタ視点からの理論構築」です。
+【基本姿勢】
+- 個別の実装よりも、「どのような種類のシステムか」「どのパターンがはまりやすいか」を考えます。
+- DDD、クリーンアーキテクチャ、イベント駆動、マイクロサービス／モノリスなどの構造を比較します。
+- if 仮定を多用し、長期的な進化パスや極端なケースも検討します。
+【ラウンド別のふるまい】
+- ラウンド1:
+  - このプロジェクトを抽象化した「典型パターン」をいくつか列挙し、
+  - それぞれに適したアーキテクチャスタイルを提案してください。
+- 2ラウンド目以降:
+  - 他エージェントの具体案を材料に、「この設計が将来どう効いてくるか」を理論的に評価してください。
+【出力フォーマット】
+1. 抽象化した課題構造・類型（どんなタイプのシステムか）
+2. 候補となるアーキテクチャ・パターン
+3. 大胆な仮説・シナリオ（if 〜 だったら）
+4. 他エージェントへの示唆（どの方向性を強めるべきか）
+    `.trim(),
+  },
+  {
+    name: "ANALYST",
+    role: "統合・分析担当（要件・設計・リスクを整理する担当）",
+    systemPrompt: `
+${DEVELOPMENT_CORE_INSTRUCTION}
+あなたはMAGIシステムの一員「ANALYST」です。役割は「各エージェントの意見を統合し、システム開発計画として整理するファシリテーター」です。
+【基本姿勢】
+- MELCHIOR / BALTHASAR / CASPER / THEORIST の発言を読み、
+  - 要件
+  - アーキテクチャ
+  - リスク・制約
+  - 将来拡張の方向性
+  をマップとして可視化します。
+- 自分の意見を増やしすぎず、「合意点・対立点・抜け漏れ」を整理して次ラウンドに渡します。
+【ラウンド別のふるまい】
+- ラウンド1:
+  - 今後のラウンドで深掘りすべき観点（例: 認証・課金・監視など）を提示してください。
+- 2ラウンド目以降:
+  - 各エージェントの論点を圧縮し、
+  - どの論点が収束しつつあり、どこがまだ分岐しているかを示してください。
+【出力フォーマット】
+1. 各エージェントの要約（MELCHIOR / BALTHASAR / CASPER / THEORIST）
+2. 合意点（要件・設計・リスクごと）
+3. 相違点・争点
+4. 追加で検討すべき論点
+5. JUDGE が検討すべき設計案・進め方の候補
+    `.trim(),
+  },
+  {
+    name: "JUDGE",
+    role: "最終判断・結論担当（仕様と開発計画をまとめる担当）",
+    systemPrompt: `
+${DEVELOPMENT_CORE_INSTRUCTION}
+あなたはMAGIシステムの一員「JUDGE」です。役割は「全ての議論を踏まえて、開発チームが動ける仕様・設計・計画をまとめる意思決定者」です。
+【基本姿勢】
+- MELCHIOR / BALTHASAR / CASPER / ANALYST / THEORIST の視点を踏まえ、
+  - 要件定義
+  - アーキテクチャ方針
+  - 開発フェーズ／タスク
+  - テスト戦略
+  - 主要リスクと対応
+  を一本のドキュメントに統合します。
+- 必要に応じて「推奨案A」「代替案B」を示し、どの条件ならどちらを選ぶべきかを説明します。
+【出力フォーマット（Markdown）】
+- 冒頭に「## プロジェクト概要」を置き、その後に以下をこの順番で記述してください。
+  - ## ユースケースとユーザーストーリー
+  - ## 機能要件（優先度付き）
+  - ## 非機能要件
+  - ## システムアーキテクチャ
+  - ## 実装計画とタスク分解
+  - ## テスト戦略・品質保証
+  - ## リスクと対応方針
+  - ## 今後の検討事項
+「実装計画とタスク分解」では、\`- [ ] タスク\` 形式のチェックリストで出力してください。
+    `.trim(),
+  },
+];
+
+const MODE_DEFINITIONS = Object.freeze({
+  general: {
+    key: "general",
+    label: "汎用モード",
+    description: "抽象議論・発想系のMAGIとして動作",
+    agents: GENERAL_AGENTS,
+    buildFirstRoundPrompt: buildGeneralFirstRoundPrompt,
+    buildFollowupPrompt: buildGeneralFollowupPrompt,
+    buildSummaryPrompt: buildGeneralSummaryPrompt,
+  },
+  development: {
+    key: "development",
+    label: "システム開発モード",
+    description: "DEV_AGENTSが要件定義・設計会議を行うモード",
+    agents: DEVELOPMENT_AGENTS,
+    buildFirstRoundPrompt: buildDevelopmentFirstRoundPrompt,
+    buildFollowupPrompt: buildDevelopmentFollowupPrompt,
+    buildSummaryPrompt: buildDevelopmentSummaryPrompt,
+  },
+});
+
 const STORAGE_AREA = chrome.storage?.session ?? chrome.storage.local;
 const STORAGE_KEY = "magi_state";
 const STATE_PERSIST_DEBOUNCE_MS = 250;
 
 const state = {
   running: false,
+  mode: DEFAULT_MODE_KEY,
+  activeMode: null,
   topic: "",
   plannedRounds: 3,
   agentTabs: [],
@@ -198,6 +407,42 @@ let keepAliveIntervalId = null;
 let persistTimerId = null;
 let activeWorkflowPromise = null;
 let stateReadyPromise = restoreState();
+
+function resolveModeKey(input) {
+  if (!input) return null;
+  const normalized = String(input).trim().toLowerCase();
+  if (MODE_DEFINITIONS[normalized]) {
+    return normalized;
+  }
+  if (normalized === "dev" || normalized === "development" || normalized === "system-development") {
+    return "development";
+  }
+  if (normalized === "default") {
+    return DEFAULT_MODE_KEY;
+  }
+  return null;
+}
+
+function getModeDefinition(modeKey = getEffectiveMode()) {
+  if (MODE_DEFINITIONS[modeKey]) {
+    return MODE_DEFINITIONS[modeKey];
+  }
+  return MODE_DEFINITIONS[DEFAULT_MODE_KEY];
+}
+
+function getEffectiveMode() {
+  return state.activeMode || state.mode || DEFAULT_MODE_KEY;
+}
+
+function getModeLabel(modeKey) {
+  const definition = getModeDefinition(modeKey);
+  return definition?.label ?? "汎用モード";
+}
+
+function getAgentDefinitions(modeKey = getEffectiveMode()) {
+  const definition = getModeDefinition(modeKey);
+  return definition.agents;
+}
 
 chrome.runtime.onStartup.addListener(() => {
   stateReadyPromise = restoreState();
@@ -217,6 +462,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         await ensureStateReady();
         const topic = (message.topic || "").trim();
         const rounds = Number(message.rounds) || 3;
+        const requestedMode =
+          resolveModeKey(message.mode) ?? state.mode ?? DEFAULT_MODE_KEY;
+        const modeKey = MODE_DEFINITIONS[requestedMode] ? requestedMode : DEFAULT_MODE_KEY;
 
         if (!topic) {
           sendResponse({ status: "error", message: "議題を入力してください。" });
@@ -232,7 +480,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         }
 
         sendResponse({ status: "ok" });
-        startDiscussion(topic, rounds).catch((error) => {
+        startDiscussion(topic, rounds, modeKey).catch((error) => {
           pushLog(`エラー: ${error.message}`);
           notify({ type: "DISCUSSION_ERROR", message: error.message });
         });
@@ -271,6 +519,29 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         pushLog("ユーザーから議論停止要求を受信しました。現在のラウンド終了後に停止します。");
         notifyState();
         sendResponse({ status: "ok" });
+      } catch (error) {
+        sendResponse({ status: "error", message: error.message });
+      }
+    })();
+    return true;
+  }
+
+  if (message?.type === "SET_MODE") {
+    (async () => {
+      try {
+        await ensureStateReady();
+        const requested = resolveModeKey(message.mode) ?? DEFAULT_MODE_KEY;
+        if (!MODE_DEFINITIONS[requested]) {
+          sendResponse({ status: "error", message: "不明なモードが指定されました。" });
+          return;
+        }
+        state.mode = requested;
+        if (!state.running) {
+          state.activeMode = null;
+        }
+        scheduleStatePersist();
+        notifyState();
+        sendResponse({ status: "ok", mode: requested });
       } catch (error) {
         sendResponse({ status: "error", message: error.message });
       }
@@ -321,10 +592,13 @@ function stopKeepAlive() {
     keepAliveIntervalId = null;
   }
 }
-async function startDiscussion(topic, rounds) {
+async function startDiscussion(topic, rounds, modeKey = getEffectiveMode()) {
   await ensureStateReady();
   await disposeAgentTabs();
   state.running = true;
+  const normalizedMode = MODE_DEFINITIONS[modeKey] ? modeKey : DEFAULT_MODE_KEY;
+  state.mode = normalizedMode;
+  state.activeMode = normalizedMode;
   state.stopRequested = false;
   state.topic = topic;
   state.plannedRounds = rounds;
@@ -333,7 +607,8 @@ async function startDiscussion(topic, rounds) {
   state.logs = [];
   state.agentTabs = [];
   scheduleStatePersist();
-  pushLog(`議論を開始します: 「${topic}」 (ラウンド数: ${rounds})`);
+  const modeLabel = getModeLabel(normalizedMode);
+  pushLog(`議論を開始します: 「${topic}」 (モード: ${modeLabel} / ラウンド数: ${rounds})`);
   notifyState();
   await runDiscussionWorkflow({ resume: false });
 }
@@ -399,6 +674,7 @@ async function runDiscussionWorkflow({ resume = false } = {}) {
     } finally {
       state.running = false;
       state.stopRequested = false;
+      state.activeMode = null;
       stopKeepAlive();
       notifyState();
     }
@@ -419,7 +695,8 @@ async function prepareAgentTabs({ reuseExisting = false } = {}) {
     await disposeAgentTabs();
   }
 
-  const tasks = AGENTS.map(async (agent) => {
+  const agents = getAgentDefinitions();
+  const tasks = agents.map(async (agent) => {
     if (!state.running) return null;
 
     if (reuseExisting) {
@@ -601,6 +878,7 @@ async function executeRounds(rounds, topic) {
 
   let previousAnalystSummary =
     roundLogs.length > 0 ? roundLogs[roundLogs.length - 1]?.analyst ?? "" : "";
+  const modeDefinition = getModeDefinition();
 
   for (let round = roundLogs.length + 1; round <= rounds; round += 1) {
     if (!state.running) break;
@@ -609,8 +887,12 @@ async function executeRounds(rounds, topic) {
 
     const template =
       round === 1 && !previousAnalystSummary
-        ? buildFirstRoundPrompt(topic)
-        : buildFollowupPrompt(previousAnalystSummary);
+        ? modeDefinition.buildFirstRoundPrompt(topic)
+        : modeDefinition.buildFollowupPrompt(previousAnalystSummary, {
+            topic,
+            round,
+            plannedRounds: rounds,
+          });
 
     const includeTheorist = Boolean(theoristAgent && round === 1 && roundLogs.length === 0);
     const participantsForRound = includeTheorist ? allParticipantAgents : votingAgents;
@@ -668,7 +950,7 @@ async function requestFinalSummary(topic) {
   if (!judge) {
     throw new Error("JUDGEタブが見つかりませんでした。");
   }
-  const prompt = buildSummaryPrompt(topic, state.roundLogs, judge);
+  const prompt = getModeDefinition().buildSummaryPrompt(topic, state.roundLogs, judge);
   const response = await sendPromptToAgent(judge, prompt);
   return response.text;
 }
@@ -685,7 +967,7 @@ ${agent.systemPrompt}
 この役割を理解したら「${agent.name}、準備完了」と応答してください。`;
 }
 
-function buildFirstRoundPrompt(topic) {
+function buildGeneralFirstRoundPrompt(topic) {
   return `【議題】
 ${topic}
 
@@ -696,7 +978,7 @@ ${topic}
 - 具体的アクションよりも「抽象化」「仮説」「モデル化」「反例提示」「問いの再定義」を優先してください。`;
 }
 
-function buildFollowupPrompt(previousAnalystSummary) {
+function buildGeneralFollowupPrompt(previousAnalystSummary) {
   const digest = (previousAnalystSummary || "").trim() || "（前ラウンドの要約はありません）";
   return `【前ラウンドの要約】
 ${digest}
@@ -728,7 +1010,7 @@ ${previousBlock}
 JUDGE が判断しやすいよう、役割ごとの差分も明確にしてください。`;
 }
 
-function buildSummaryPrompt(topic, rounds, judgeAgent) {
+function buildGeneralSummaryPrompt(topic, rounds, judgeAgent) {
   const digest = formatRoundHistory(rounds);
 
   return `${judgeAgent.systemPrompt}
@@ -750,6 +1032,67 @@ JUDGEとして、以下の構成で最終的なまとめを作成してくださ
 
 【参考】
 ${digest}
+`;
+}
+
+function buildDevelopmentFirstRoundPrompt(topic) {
+  return `【プロジェクト概要】
+${topic}
+
+【タスク】
+- あなたは既に与えられた役割・出力フォーマットに従ってください。
+- 今回はラウンド1です。あなたの視点から見た
+  - プロジェクトのゴール
+  - 想定ユーザー・ユースケース
+  - 必要な機能／非機能
+  - アーキテクチャやリスクの初期仮説
+を整理してください。
+- 出力は日本語で、800〜1600文字程度を目安にしてください。
+- 抽象的な議論だけでなく、できるだけ「実際の開発に使える粒度」まで具体化してください。`;
+}
+
+function buildDevelopmentFollowupPrompt(previousAnalystSummary) {
+  const digest = (previousAnalystSummary || "").trim() || "（前ラウンドの要約はありません）";
+  return `【前ラウンドの要約】
+${digest}
+
+【タスク】
+- 与えられた役割・フォーマットを厳守し、設計会議として具体的に議論してください。
+- 今回は2ラウンド目以降です。以下を必ず盛り込んでください。
+  - 他エージェントの提案に対する評価・補完・懸念
+  - 要件／アーキテクチャ／リスクの抜け漏れ指摘
+  - MVPスコープや段階的リリースに向けた具体的アクション
+- ビジネス価値・UX・技術実現性・品質・運用性のバランスを明示してください。
+- 出力は日本語で800〜1600文字を目安にし、実際の開発チームが参照できる粒度まで落とし込んでください。`;
+}
+
+function buildDevelopmentSummaryPrompt(topic, rounds, judgeAgent) {
+  const digest = formatRoundHistory(rounds);
+
+  return `${judgeAgent.systemPrompt}
+
+【議論の総括依頼】
+
+プロジェクト: ${topic}
+
+全${rounds.length}ラウンドの議論が終了しました。
+JUDGEとして、開発チームがそのまま参照できる仕様・設計ドキュメントを作成してください。
+
+【出力構成（Markdown）】
+
+1. プロジェクト概要（1〜3段落で簡潔に）
+2. ユースケースとユーザーストーリー（代表的なものを列挙）
+3. 機能要件（Must / Should / Could 単位で整理）
+4. 非機能要件（性能・可用性・セキュリティ・運用など）
+5. システムアーキテクチャ（テキストで構成図を説明）
+6. 実装計画とタスク分解（\`- [ ] タスク\` 形式）
+7. テスト戦略・品質保証（テストレベル・観点・自動化方針）
+8. 主要リスクと対応方針
+9. 今後の問い・未解決点
+
+【参考（ラウンドログダイジェスト）】
+${digest}
+
 `;
 }
 
@@ -1034,8 +1377,13 @@ function notify(event) {
 }
 
 function getPublicState() {
+  const effectiveMode = getEffectiveMode();
   return {
     running: state.running,
+    mode: state.mode ?? DEFAULT_MODE_KEY,
+    activeMode: state.activeMode,
+    effectiveMode,
+    modeLabel: getModeLabel(effectiveMode),
     topic: state.topic,
     plannedRounds: state.plannedRounds,
     logs: state.logs,
@@ -1253,6 +1601,10 @@ async function restoreState() {
 
 function applyStateSnapshot(snapshot) {
   state.running = Boolean(snapshot.running);
+  const storedMode = resolveModeKey(snapshot.mode) ?? DEFAULT_MODE_KEY;
+  const storedActiveMode = resolveModeKey(snapshot.activeMode) ?? (state.running ? storedMode : null);
+  state.mode = storedMode;
+  state.activeMode = storedActiveMode;
   state.topic = snapshot.topic ?? "";
   state.plannedRounds = Number(snapshot.plannedRounds) || 3;
   state.roundLogs = normalizeRoundLogs(snapshot.roundLogs);
@@ -1262,19 +1614,20 @@ function applyStateSnapshot(snapshot) {
     : [];
   state.agentWindowId = snapshot.agentWindowId ?? null;
   state.stopRequested = Boolean(snapshot.stopRequested);
-  state.agentTabs = hydrateAgentTabs(snapshot.agentTabs);
+  state.agentTabs = hydrateAgentTabs(snapshot.agentTabs, storedActiveMode || storedMode);
 }
 
-function hydrateAgentTabs(savedTabs) {
+function hydrateAgentTabs(savedTabs, modeKey = DEFAULT_MODE_KEY) {
   if (!Array.isArray(savedTabs)) {
     return [];
   }
+  const agents = getAgentDefinitions(modeKey);
   return savedTabs
     .map((entry) => {
       if (!entry?.name || !entry?.tabId) {
         return null;
       }
-      const definition = AGENTS.find((agent) => agent.name === entry.name);
+      const definition = agents.find((agent) => agent.name === entry.name);
       if (!definition) {
         return null;
       }
@@ -1324,6 +1677,8 @@ async function persistState() {
 function serializeState() {
   return {
     running: state.running,
+    mode: state.mode,
+    activeMode: state.activeMode,
     topic: state.topic,
     plannedRounds: state.plannedRounds,
     agentTabs: state.agentTabs.map(({ name, tabId }) => ({ name, tabId })),

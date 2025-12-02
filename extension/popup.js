@@ -1,6 +1,7 @@
 const form = document.getElementById("control-form");
 const topicInput = document.getElementById("topic-input");
 const roundsInput = document.getElementById("rounds-input");
+const modeSelect = document.getElementById("mode-select");
 const statusBadge = document.getElementById("status");
 const logView = document.getElementById("log-view");
 const summaryView = document.getElementById("summary-view");
@@ -10,6 +11,10 @@ const downloadLogButton = document.getElementById("download-log-btn");
 const startButton = document.getElementById("start-btn");
 const stopButton = document.getElementById("stop-btn");
 const AGENT_DISPLAY_ORDER = ["MELCHIOR", "BALTHASAR", "CASPER", "THEORIST", "ANALYST", "JUDGE"];
+const MODE_LABELS = {
+  general: "汎用モード",
+  development: "システム開発モード",
+};
 
 let latestState = null;
 
@@ -17,6 +22,8 @@ form.addEventListener("submit", async (event) => {
   event.preventDefault();
   const topic = topicInput.value.trim();
   const rounds = Number(roundsInput.value) || 3;
+  const mode = modeSelect.value || "general";
+  const modeLabel = MODE_LABELS[mode] || mode;
 
   if (!topic) {
     appendLog("⚠️ 議題を入力してください。");
@@ -24,17 +31,30 @@ form.addEventListener("submit", async (event) => {
   }
 
   setFormDisabled(true);
-  appendLog(`議論を開始します: 「${topic}」 (ラウンド: ${rounds})`);
+  appendLog(`議論を開始します: 「${topic}」 (モード: ${modeLabel} / ラウンド: ${rounds})`);
 
   try {
     await sendRuntimeMessage({
       type: "START_DISCUSSION",
       topic,
       rounds,
+      mode,
     });
   } catch (error) {
     appendLog(`エラー: ${error.message}`);
     setFormDisabled(false);
+  }
+});
+
+modeSelect.addEventListener("change", async () => {
+  const mode = modeSelect.value || "general";
+  const label = MODE_LABELS[mode] || mode;
+  try {
+    await sendRuntimeMessage({ type: "SET_MODE", mode });
+    appendLog(`⚙️ モードを ${label} に切り替えました。`);
+  } catch (error) {
+    appendLog(`⚠️ モード切替に失敗しました: ${error.message}`);
+    await refreshState().catch(() => {});
   }
 });
 
@@ -162,7 +182,17 @@ function renderState(state) {
   if (!state) return;
   latestState = JSON.parse(JSON.stringify(state));
 
-  statusBadge.textContent = state.running ? "実行中" : "待機中";
+  if (modeSelect) {
+    const preferredMode = state.mode && MODE_LABELS[state.mode] ? state.mode : "general";
+    modeSelect.value = preferredMode;
+  }
+  const statusText = state.running ? "実行中" : "待機中";
+  const badgeModeLabel =
+    state.modeLabel ||
+    MODE_LABELS[state.activeMode] ||
+    MODE_LABELS[state.mode] ||
+    "";
+  statusBadge.textContent = badgeModeLabel ? `${statusText}・${badgeModeLabel}` : statusText;
   statusBadge.classList.toggle("running", Boolean(state.running));
   setFormDisabled(Boolean(state.running));
 
@@ -205,7 +235,10 @@ function createRoundPre(text) {
 function buildDiscussionMarkdown(state) {
   const lines = [];
   const topic = state.topic?.trim() || "未設定";
+  const modeKey = state.activeMode || state.mode || "general";
+  const modeLabel = MODE_LABELS[modeKey] || modeKey;
   lines.push(`# 議題: ${topic}`);
+  lines.push(`- モード: ${modeLabel}`);
   lines.push("");
 
   const rounds = Array.isArray(state.roundLogs) ? state.roundLogs : [];

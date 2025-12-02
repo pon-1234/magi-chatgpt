@@ -18,7 +18,7 @@ ChatGPT Web UIを5タブ並列で操作し、MAGI三賢人をモチーフにし�
 
 ## 🧭 使い方
 
-1. ポップアップで議題とラウンド数を入力し、「議論を開始」を押下  
+1. ポップアップでモード（汎用／システム開発）、議題、ラウンド数を入力し、「議論を開始」を押下  
 2. 背景で5つのChatGPTタブ（MELCHIOR/BALTHASAR/CASPER/ANALYST/JUDGE）が順に開き、人格初期化が走る  
 3. 各ラウンドは **M/B/C → ANALYST要約 → 次ラウンド** の順で進行し、最後にJUDGEがMarkdownレポートを出力  
 4. 進捗と最終まとめはポップアップのログエリアに逐次表示され、必要に応じて「停止」ボタンで途中打ち切りが可能
@@ -27,7 +27,7 @@ ChatGPT Web UIを5タブ並列で操作し、MAGI三賢人をモチーフにし�
 
 ## 🔧 カスタマイズ
 
-- `background.js` の `DEFAULT_AGENTS` 配列で各エージェントの役割・ラウンド指示を調整可能  
+- `background.js` の `GENERAL_AGENTS` / `DEVELOPMENT_AGENTS` と `MODE_DEFINITIONS` を編集すると、モードごとの役割・出力フォーマットを変更可能  
 - 議論フローやタイムアウト (`RESPONSE_TIMEOUT_MS`) は `background.js` の定数で変更  
 - DOMセレクタやレスポンス抽出ロジックは `content.js` で管理
 

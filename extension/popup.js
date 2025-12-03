@@ -1,3 +1,7 @@
+"use strict";
+
+import { MSG, EVENT } from "./messages.js";
+
 const form = document.getElementById("control-form");
 const topicInput = document.getElementById("topic-input");
 const roundsInput = document.getElementById("rounds-input");
@@ -10,6 +14,10 @@ const clearLogButton = document.getElementById("clear-log-btn");
 const downloadLogButton = document.getElementById("download-log-btn");
 const startButton = document.getElementById("start-btn");
 const stopButton = document.getElementById("stop-btn");
+const responseTimeoutInput = document.getElementById("response-timeout-input");
+const tabRefocusInput = document.getElementById("tab-refocus-input");
+const saveSettingsButton = document.getElementById("settings-save-btn");
+const settingsStatus = document.getElementById("settings-status");
 const AGENT_DISPLAY_ORDER = ["MELCHIOR", "BALTHASAR", "CASPER", "THEORIST", "ANALYST", "JUDGE"];
 const MODE_LABELS = {
   general: "汎用モード",
@@ -17,6 +25,12 @@ const MODE_LABELS = {
 };
 
 let latestState = null;
+let latestSettings = null;
+let settingsSaving = false;
+const SETTINGS_LIMITS = {
+  responseTimeoutSeconds: { min: 60, max: 900 },
+  tabRefocusSeconds: { min: 10, max: 300 },
+};
 
 form.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -35,7 +49,7 @@ form.addEventListener("submit", async (event) => {
 
   try {
     await sendRuntimeMessage({
-      type: "START_DISCUSSION",
+      type: MSG.START_DISCUSSION,
       topic,
       rounds,
       mode,
@@ -50,7 +64,7 @@ modeSelect.addEventListener("change", async () => {
   const mode = modeSelect.value || "general";
   const label = MODE_LABELS[mode] || mode;
   try {
-    await sendRuntimeMessage({ type: "SET_MODE", mode });
+    await sendRuntimeMessage({ type: MSG.SET_MODE, mode });
     appendLog(`⚙️ モードを ${label} に切り替えました。`);
   } catch (error) {
     appendLog(`⚠️ モード切替に失敗しました: ${error.message}`);
@@ -58,8 +72,17 @@ modeSelect.addEventListener("change", async () => {
   }
 });
 
-clearLogButton.addEventListener("click", () => {
-  logView.textContent = "ログをクリアしました。";
+clearLogButton.addEventListener("click", async () => {
+  if (clearLogButton.disabled) return;
+  clearLogButton.disabled = true;
+  try {
+    await sendRuntimeMessage({ type: MSG.CLEAR_LOGS });
+    logView.textContent = "ログをクリアしました。";
+  } catch (error) {
+    appendLog(`⚠️ ログのクリアに失敗しました: ${error.message}`);
+  } finally {
+    clearLogButton.disabled = false;
+  }
 });
 
 downloadLogButton.addEventListener("click", () => {
@@ -84,47 +107,72 @@ stopButton.addEventListener("click", async () => {
   stopButton.disabled = true;
   appendLog("⏹ 議論停止をリクエストしました。");
   try {
-    await sendRuntimeMessage({ type: "STOP_DISCUSSION" });
+    await sendRuntimeMessage({ type: MSG.STOP_DISCUSSION });
   } catch (error) {
     appendLog(`停止要求に失敗しました: ${error.message}`);
     stopButton.disabled = false;
   }
 });
 
+if (saveSettingsButton) {
+  saveSettingsButton.addEventListener("click", async () => {
+    try {
+      const payload = collectSettingsPayload();
+      setSettingsStatus("保存中…", "pending");
+      const response = await sendRuntimeMessage({ type: MSG.UPDATE_SETTINGS, settings: payload });
+      latestSettings = response?.settings ?? payload;
+      applySettingsToForm(latestSettings, { force: true });
+      setSettingsStatus("保存済み", "success");
+      appendLog("⚙️ タイムアウト設定を更新しました。");
+    } catch (error) {
+      setSettingsStatus("保存失敗", "error");
+      appendLog(`⚠️ 設定更新に失敗しました: ${error.message}`);
+    }
+  });
+}
+
 chrome.runtime.onMessage.addListener((message) => {
-  if (message?.type === "LOG") {
+  if (message?.type === EVENT.LOG) {
     appendLog(formatLogEntry(message.entry));
   }
 
-  if (message?.type === "STATE_UPDATE") {
+  if (message?.type === EVENT.STATE_UPDATE) {
     renderState(message.state);
   }
 
-  if (message?.type === "ROUND_COMPLETE") {
+  if (message?.type === EVENT.ROUND_COMPLETE) {
     appendLog(`ラウンド${message.round}の応答を取得しました。`);
   }
 
-  if (message?.type === "DISCUSSION_COMPLETE") {
+  if (message?.type === EVENT.DISCUSSION_COMPLETE) {
     appendLog("✅ 議論が完了しました。");
     renderSummary(message.summary);
     setFormDisabled(false);
   }
 
-  if (message?.type === "DISCUSSION_ERROR") {
+  if (message?.type === EVENT.DISCUSSION_ERROR) {
     appendLog(`⚠️ エラー: ${message.message}`);
     setFormDisabled(false);
   }
+
+  if (message?.type === EVENT.SETTINGS_UPDATED) {
+    latestSettings = message.settings || latestSettings;
+    applySettingsToForm(latestSettings);
+    setSettingsStatus("最新", "success");
+  }
 });
 
-refreshState().catch((error) => {
-  appendLog(`状態取得に失敗しました: ${error.message}`);
+Promise.all([refreshState(), requestInitialSettings()]).catch((error) => {
+  appendLog(`初期データ取得に失敗しました: ${error.message}`);
 });
 
 function appendLog(text) {
+  if (!text) return;
   const current = logView.textContent?.trim();
-  logView.textContent = current
-    ? `${current}\n${timestamp()} ${text}`
-    : `${timestamp()} ${text}`;
+  const normalized = text.toString();
+  const alreadyStamped = /^\d{2}:\d{2}:\d{2}/.test(normalized.trim());
+  const line = alreadyStamped ? normalized : `${timestamp()} ${normalized}`;
+  logView.textContent = current ? `${current}\n${line}` : line;
   logView.scrollTop = logView.scrollHeight;
 }
 
@@ -152,12 +200,16 @@ function renderRounds(roundLogs) {
     details.appendChild(summary);
 
     const participants = round?.participants || {};
-    if (Object.keys(participants).length === 0) {
+    const participantKeys = Object.keys(participants);
+    if (participantKeys.length === 0) {
       const empty = document.createElement("p");
       empty.textContent = "応答が取得できませんでした。";
       details.appendChild(empty);
     } else {
-      Object.entries(participants).forEach(([name, text]) => {
+      const displayOrder = Array.from(new Set([...AGENT_DISPLAY_ORDER, ...participantKeys]));
+      displayOrder.forEach((name) => {
+        const text = participants[name];
+        if (!text) return;
         const heading = document.createElement("h4");
         heading.textContent = name;
         details.appendChild(heading);
@@ -182,11 +234,25 @@ function renderState(state) {
   if (!state) return;
   latestState = JSON.parse(JSON.stringify(state));
 
+  if (typeof state.topic === "string" && !topicInput.value) {
+    topicInput.value = state.topic;
+  }
+  if (
+    typeof state.plannedRounds === "number" &&
+    (!roundsInput.value || Number(roundsInput.value) === 0)
+  ) {
+    roundsInput.value = String(state.plannedRounds);
+  }
+
   if (modeSelect) {
     const preferredMode = state.mode && MODE_LABELS[state.mode] ? state.mode : "general";
     modeSelect.value = preferredMode;
   }
-  const statusText = state.running ? "実行中" : "待機中";
+  const statusText = state.running
+    ? state.stopRequested
+      ? "停止要求中"
+      : "実行中"
+    : "待機中";
   const badgeModeLabel =
     state.modeLabel ||
     MODE_LABELS[state.activeMode] ||
@@ -194,7 +260,7 @@ function renderState(state) {
     "";
   statusBadge.textContent = badgeModeLabel ? `${statusText}・${badgeModeLabel}` : statusText;
   statusBadge.classList.toggle("running", Boolean(state.running));
-  setFormDisabled(Boolean(state.running));
+  setFormDisabled(Boolean(state.running), Boolean(state.stopRequested));
 
   if (state.logs?.length) {
     logView.textContent = state.logs.map((entry) => formatLogEntry(entry)).join("\n");
@@ -205,13 +271,16 @@ function renderState(state) {
 
   renderSummary(state.summary || "");
   renderRounds(state.roundLogs || []);
+  if (state.settings) {
+    applySettingsToForm(state.settings);
+  }
 }
 
-function setFormDisabled(disabled) {
-  topicInput.disabled = disabled;
-  roundsInput.disabled = disabled;
-  startButton.disabled = disabled;
-  stopButton.disabled = !disabled;
+function setFormDisabled(isRunning, stopRequested = false) {
+  topicInput.disabled = isRunning;
+  roundsInput.disabled = isRunning;
+  startButton.disabled = isRunning;
+  stopButton.disabled = !isRunning || stopRequested;
 }
 
 function formatLogEntry(entry) {
@@ -296,17 +365,95 @@ function triggerMarkdownDownload(content, filename) {
 
 function sanitizeFileStem(input) {
   if (!input) return "discussion";
-  return input
-    .toString()
-    .trim()
-    .toLowerCase()
-    .slice(0, 40)
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "") || "discussion";
+  const trimmed = input.toString().trim();
+  if (!trimmed) return "discussion";
+  const sanitized = trimmed
+    .replace(/[\\/:*?"<>|]/g, "-")
+    .replace(/[\u0000-\u001F]/g, "")
+    .replace(/\s+/g, "-")
+    .replace(/-+/g, "-")
+    .slice(0, 60)
+    .replace(/^-|-$/g, "");
+  return sanitized || "discussion";
+}
+
+function applySettingsToForm(settings, { force = false } = {}) {
+  if (!settings) return;
+  latestSettings = { ...settings };
+  if (responseTimeoutInput && (force || document.activeElement !== responseTimeoutInput)) {
+    responseTimeoutInput.value = msToSeconds(settings.responseTimeoutMs);
+  }
+  if (tabRefocusInput && (force || document.activeElement !== tabRefocusInput)) {
+    tabRefocusInput.value = msToSeconds(settings.tabRefocusIntervalMs);
+  }
+}
+
+function collectSettingsPayload() {
+  if (!responseTimeoutInput || !tabRefocusInput) {
+    throw new Error("設定入力欄が見つかりません。");
+  }
+  const responseSeconds = clamp(
+    Number(responseTimeoutInput.value),
+    SETTINGS_LIMITS.responseTimeoutSeconds.min,
+    SETTINGS_LIMITS.responseTimeoutSeconds.max
+  );
+  const refocusSeconds = clamp(
+    Number(tabRefocusInput.value),
+    SETTINGS_LIMITS.tabRefocusSeconds.min,
+    SETTINGS_LIMITS.tabRefocusSeconds.max
+  );
+  if (!Number.isFinite(responseSeconds)) {
+    throw new Error("応答待ちタイムアウトが無効です。");
+  }
+  if (!Number.isFinite(refocusSeconds)) {
+    throw new Error("タブ再アクティブ化間隔が無効です。");
+  }
+  return {
+    responseTimeoutMs: secondsToMs(responseSeconds),
+    tabRefocusIntervalMs: secondsToMs(refocusSeconds),
+  };
+}
+
+function msToSeconds(ms) {
+  if (!Number.isFinite(Number(ms))) return "";
+  return Math.round(Number(ms) / 1000);
+}
+
+function secondsToMs(seconds) {
+  return Math.round(Number(seconds) * 1000);
+}
+
+function clamp(value, min, max) {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(Math.max(value, min), max);
+}
+
+function setSettingsStatus(text, variant = "idle") {
+  if (!settingsStatus) return;
+  settingsStatus.textContent = text;
+  settingsStatus.dataset.status = variant;
+}
+
+async function requestInitialSettings() {
+  setSettingsStatus("取得中…", "pending");
+  try {
+    const response = await sendRuntimeMessage({ type: MSG.GET_SETTINGS });
+    if (response?.settings) {
+      latestSettings = response.settings;
+      applySettingsToForm(response.settings, { force: true });
+      setSettingsStatus("同期済み", "success");
+      return;
+    }
+  } catch (error) {
+    appendLog(`⚠️ 設定取得に失敗しました: ${error.message}`);
+    setSettingsStatus("エラー", "error");
+    return;
+  }
+  setSettingsStatus("未同期", "idle");
 }
 
 async function refreshState() {
-  const response = await sendRuntimeMessage({ type: "GET_STATE" });
+  const response = await sendRuntimeMessage({ type: MSG.GET_STATE });
   if (response?.state) {
     renderState(response.state);
   }

@@ -41,6 +41,41 @@
       </div>
     </form>
 
+    <section class="advanced-settings">
+      <div class="section-header">
+        <h2>タイムアウト設定</h2>
+        <span id="settings-status" class="settings-status">未同期</span>
+      </div>
+      <p class="settings-description">
+        応答取得やタブ再アクティブのタイミングを変更できます（chrome.storage.syncで共有されます）。
+      </p>
+      <div class="settings-grid">
+        <label>
+          応答待ちタイムアウト（秒）
+          <input
+            id="response-timeout-input"
+            type="number"
+            min="60"
+            max="900"
+            step="30"
+            value="300"
+          />
+        </label>
+        <label>
+          タブ再アクティブ化間隔（秒）
+          <input
+            id="tab-refocus-input"
+            type="number"
+            min="10"
+            max="300"
+            step="5"
+            value="45"
+          />
+        </label>
+      </div>
+      <button type="button" id="settings-save-btn" class="secondary">設定を保存</button>
+    </section>
+
     <section>
       <div class="section-header">
         <h2>ログ</h2>

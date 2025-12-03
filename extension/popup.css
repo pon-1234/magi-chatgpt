@@ -118,6 +118,46 @@ section {
   border: 1px solid rgba(255, 255, 255, 0.05);
 }
 
+.advanced-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.settings-description {
+  margin: 0;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.settings-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-status {
+  font-size: 0.7rem;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.settings-status[data-status="pending"] {
+  background: rgba(255, 193, 7, 0.2);
+  color: #ffda7d;
+}
+
+.settings-status[data-status="success"] {
+  background: rgba(76, 175, 80, 0.2);
+  color: #c9ffb5;
+}
+
+.settings-status[data-status="error"] {
+  background: rgba(255, 87, 87, 0.25);
+  color: #ffb3b3;
+}
+
 .section-header {
   display: flex;
   justify-content: space-between;

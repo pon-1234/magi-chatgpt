@@ -3,16 +3,14 @@
 const DEFAULT_RESPONSE_TIMEOUT = 300_000;
 const COMPOSER_WAIT_TIMEOUT = 60_000;
 const COMPOSER_SELECTORS = [
+  'div[contenteditable="true"][data-testid="textbox"]',
+  'textarea[data-testid="prompt-textarea"]',
+  "#prompt-textarea",
   'textarea[data-id="root"]',
   'textarea[data-testid="textbox"]',
-  'textarea[data-testid="prompt-textarea"]',
   'textarea[placeholder*="Send a message"]',
   'textarea[placeholder*="メッセージ"]',
-  "#prompt-textarea",
-  'div[contenteditable="true"][data-testid="textbox"]',
-  'div[contenteditable="true"][data-placeholder]',
   'div[contenteditable="true"][aria-label*="メッセージ"]',
-  "form textarea",
 ];
 
 const CONTINUE_BUTTON_PATTERNS = [
@@ -33,7 +31,17 @@ const BLOCKING_TEXT_PATTERNS = [
   { pattern: /network error/i, message: "ChatGPTでネットワークエラーが発生しました。" },
 ];
 
+const STOP_BUTTON_SELECTORS = [
+  'button[data-testid="stop-button"]',
+  'button[aria-label*="Stop generating"]',
+  'button[aria-label*="停止"]',
+];
+
+const STOP_BUTTON_TEXT_PATTERNS = [/stop\s+generating/i, /生成を停止/, /生成を中断/, /停止する/];
+
 let isBusy = false;
+let currentPromptAbortController = null;
+const ABORT_DEFAULT_MESSAGE = "ユーザー操作により処理を中断しました。";
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "PING") {
@@ -41,20 +49,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return;
   }
 
+  if (message?.type === "ABORT_PROMPT") {
+    const reason = message?.reason || ABORT_DEFAULT_MESSAGE;
+    const controller = currentPromptAbortController;
+    let aborted = false;
+    if (controller && !controller.signal.aborted) {
+      setAbortReason(controller.signal, reason);
+      controller.abort(reason);
+      aborted = true;
+    }
+    const stopClicked = clickStopGeneratingButton();
+    sendResponse({ status: "ok", aborted, stopClicked });
+    return;
+  }
+
   if (message?.type === "SEND_PROMPT") {
     if (isBusy) {
       sendResponse({
         status: "error",
-        error: "このタブは前のプロンプトを処理中です。しばらく待ってください。",
+        message: "このタブは前のプロンプトを処理中です。しばらく待ってください。",
       });
       return;
     }
 
     isBusy = true;
-    handleSendPrompt(message)
+    const abortController = new AbortController();
+    currentPromptAbortController = abortController;
+    handleSendPrompt(message, abortController.signal)
       .then((data) => sendResponse({ status: "ok", data }))
-      .catch((error) => sendResponse({ status: "error", error: error.message }))
+      .catch((error) => sendResponse({ status: "error", message: error.message }))
       .finally(() => {
+        if (currentPromptAbortController === abortController) {
+          currentPromptAbortController = null;
+        }
         isBusy = false;
       });
     return true;
@@ -63,19 +90,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return false;
 });
 
-async function handleSendPrompt({ prompt, timeout = DEFAULT_RESPONSE_TIMEOUT }) {
-  const composer = await waitForComposer();
+async function handleSendPrompt({ prompt, timeout = DEFAULT_RESPONSE_TIMEOUT }, signal) {
+  ensureNotAborted(signal);
+  const composer = await waitForComposer({ signal });
   const knownIds = collectAssistantIds();
-  await focusComposer(composer);
-  await fillComposer(composer, prompt);
-  await triggerSend(composer);
-  const response = await waitForNewAssistantResponse(knownIds, timeout);
+  await focusComposer(composer, signal);
+  await fillComposer(composer, prompt, signal);
+  const currentText = readComposerText(composer);
+  const normalizedPrompt = normalizeWhitespace(prompt);
+  const normalizedCurrent = normalizeWhitespace(currentText);
+  if (!normalizedCurrent) {
+    throw new Error("入力欄への書き込みに失敗しました（テキストが空のままです）。");
+  }
+  if (normalizedPrompt && normalizedPrompt !== normalizedCurrent) {
+    throw new Error("入力欄に正しいテキストを書き込めませんでした。");
+  }
+  await triggerSend(composer, signal);
+  const response = await waitForNewAssistantResponse(knownIds, { timeout, signal });
   return response;
 }
 
-async function waitForComposer(timeout = COMPOSER_WAIT_TIMEOUT) {
+async function waitForComposer({ timeout = COMPOSER_WAIT_TIMEOUT, signal } = {}) {
   const start = Date.now();
   while (Date.now() - start < timeout) {
+    ensureNotAborted(signal);
     for (const selector of COMPOSER_SELECTORS) {
       const element = document.querySelector(selector);
       if (isComposer(element)) {
@@ -83,7 +121,9 @@ async function waitForComposer(timeout = COMPOSER_WAIT_TIMEOUT) {
       }
     }
     await delay(500);
+    ensureNotAborted(signal);
   }
+  ensureNotAborted(signal);
   throw new Error(
     "入力欄を検出できませんでした。ChatGPTにログイン済みか確認し、一度手動でメッセージ欄をクリックしてから再実行してください（UIが変わっている場合は拡張機能のアップデートをお待ちください）。"
   );
@@ -103,12 +143,15 @@ function isComposer(element) {
   return false;
 }
 
-async function focusComposer(element) {
+async function focusComposer(element, signal) {
+  ensureNotAborted(signal);
   element.focus();
   await delay(50);
+  ensureNotAborted(signal);
 }
 
-async function fillComposer(element, text) {
+async function fillComposer(element, text, signal) {
+  ensureNotAborted(signal);
   if (element.tagName === "TEXTAREA" || element.tagName === "INPUT") {
     element.value = text;
     element.dispatchEvent(new InputEvent("input", { bubbles: true, data: text }));
@@ -125,17 +168,28 @@ async function fillComposer(element, text) {
     throw new Error("入力欄への書き込みに失敗しました。");
   }
   await delay(100);
+  ensureNotAborted(signal);
 }
 
-async function triggerSend(element) {
-  const form = element.closest("form");
-  const sendButton =
-    document.querySelector('button[data-testid="send-button"]') ||
-    form?.querySelector('button[type="submit"]');
+function readComposerText(element) {
+  if (!element) return "";
+  if (element.tagName === "TEXTAREA" || element.tagName === "INPUT") {
+    return element.value || "";
+  }
+  if (element.isContentEditable) {
+    return element.textContent || "";
+  }
+  return "";
+}
+
+async function triggerSend(element, signal) {
+  ensureNotAborted(signal);
+  const sendButton = findSendButton(element);
   if (sendButton) {
     sendButton.removeAttribute("disabled");
     sendButton.click();
     await delay(200);
+    ensureNotAborted(signal);
     return;
   }
 
@@ -156,6 +210,41 @@ async function triggerSend(element) {
     })
   );
   await delay(200);
+  ensureNotAborted(signal);
+}
+
+function findSendButton(element) {
+  const selectors = [
+    'button[data-testid="send-button"]',
+    'button[aria-label*="Send"]',
+    'button[aria-label*="送信"]',
+    'button[type="submit"]',
+  ];
+
+  const roots = [];
+  if (element) {
+    const form = element.closest("form");
+    if (form) roots.push(form);
+    const wrapper =
+      element.closest('[data-testid="composer"]') ||
+      element.closest('[data-testid="prompt-wrapper"]') ||
+      element.parentElement;
+    if (wrapper) roots.push(wrapper);
+  }
+
+  for (const root of roots) {
+    if (!root) continue;
+    for (const selector of selectors) {
+      const button = root.querySelector(selector);
+      if (button) return button;
+    }
+  }
+
+  for (const selector of selectors) {
+    const button = document.querySelector(selector);
+    if (button) return button;
+  }
+  return null;
 }
 
 function collectAssistantIds() {
@@ -175,7 +264,13 @@ function getMessageId(node, index = 0) {
   );
 }
 
-async function waitForNewAssistantResponse(knownIds, timeout = DEFAULT_RESPONSE_TIMEOUT) {
+function getLastUserMessageText() {
+  const nodes = Array.from(document.querySelectorAll('[data-message-author-role="user"]'));
+  const last = nodes[nodes.length - 1];
+  return last?.innerText?.trim() || "";
+}
+
+async function waitForNewAssistantResponse(knownIds, { timeout = DEFAULT_RESPONSE_TIMEOUT, signal } = {}) {
   const start = Date.now();
   return new Promise((resolve, reject) => {
     let observer;
@@ -191,7 +286,27 @@ async function waitForNewAssistantResponse(knownIds, timeout = DEFAULT_RESPONSE_
       if (continueIntervalId) {
         clearInterval(continueIntervalId);
       }
+      if (signal) {
+        signal.removeEventListener("abort", handleAbort);
+      }
     };
+
+    const rejectWith = (message) => {
+      cleanup();
+      reject(new Error(message));
+    };
+
+    const handleAbort = () => {
+      rejectWith(getAbortReason(signal));
+    };
+
+    if (signal) {
+      if (signal.aborted) {
+        rejectWith(getAbortReason(signal));
+        return;
+      }
+      signal.addEventListener("abort", handleAbort, { once: true });
+    }
 
     const isGenerating = () => {
       if (
@@ -205,6 +320,9 @@ async function waitForNewAssistantResponse(knownIds, timeout = DEFAULT_RESPONSE_
 
     const finalizeIfStable = () => {
       if (!lastMessage) return;
+      if (signal?.aborted) {
+        return;
+      }
       if (isGenerating()) return;
       const stableFor = Date.now() - lastMessage.changedAt;
       if (stableFor < 500) return;
@@ -214,6 +332,7 @@ async function waitForNewAssistantResponse(knownIds, timeout = DEFAULT_RESPONSE_
         text: lastMessage.text,
         html: lastMessage.html,
         id: lastMessage.id,
+        lastUserText: getLastUserMessageText(),
       });
     };
 
@@ -290,6 +409,31 @@ function clickContinueButtonIfPresent() {
   return false;
 }
 
+function clickStopGeneratingButton() {
+  for (const selector of STOP_BUTTON_SELECTORS) {
+    const button = document.querySelector(selector);
+    if (button && !button.disabled) {
+      button.click();
+      return true;
+    }
+  }
+
+  const buttons = Array.from(document.querySelectorAll("button"));
+  for (const button of buttons) {
+    if (button.disabled) continue;
+    const text = button.textContent?.trim() || "";
+    const aria = button.getAttribute("aria-label") || "";
+    if (
+      STOP_BUTTON_TEXT_PATTERNS.some((pattern) => pattern.test(text)) ||
+      STOP_BUTTON_TEXT_PATTERNS.some((pattern) => pattern.test(aria))
+    ) {
+      button.click();
+      return true;
+    }
+  }
+  return false;
+}
+
 function isContinueButtonMatch(text) {
   if (!text) return false;
   if (CONTINUE_BUTTON_PATTERNS.some((pattern) => pattern.test(text))) {
@@ -305,6 +449,9 @@ function detectBlockingIssues() {
   if (document.querySelector('button[data-testid="login-button"]')) {
     return "ChatGPTにログインしてください。";
   }
+  if (clickDeepResearchStopIfPresent()) {
+    return null;
+  }
   const bodyText = document.body?.innerText || "";
   for (const { pattern, message } of BLOCKING_TEXT_PATTERNS) {
     if (pattern.test(bodyText)) {
@@ -316,4 +463,55 @@ function detectBlockingIssues() {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function clickDeepResearchStopIfPresent() {
+  const buttons = Array.from(document.querySelectorAll("button"));
+  if (!buttons.length) return false;
+  const normalize = (btn) => btn.textContent?.trim() || "";
+  const stopButton = buttons.find((btn) => /停止する/.test(normalize(btn)));
+  const keepButton = buttons.find((btn) => /停止しない/.test(normalize(btn)));
+  if (stopButton && keepButton) {
+    stopButton.click();
+    return true;
+  }
+  return false;
+}
+
+function normalizeWhitespace(input) {
+  if (input == null) return "";
+  return input.toString().replace(/\s+/g, " ").trim();
+}
+
+function ensureNotAborted(signal, fallback = ABORT_DEFAULT_MESSAGE) {
+  if (signal?.aborted) {
+    throw new Error(getAbortReason(signal, fallback));
+  }
+}
+
+function getAbortReason(signal, fallback = ABORT_DEFAULT_MESSAGE) {
+  if (!signal) return fallback;
+  const reason = signal.reason ?? signal.__magiAbortReason;
+  if (!reason) return fallback;
+  if (typeof reason === "string") return reason;
+  if (reason instanceof Error) return reason.message;
+  try {
+    return String(reason);
+  } catch {
+    return fallback;
+  }
+}
+
+function setAbortReason(signal, reason) {
+  if (!signal || !reason) return;
+  try {
+    Object.defineProperty(signal, "__magiAbortReason", {
+      configurable: true,
+      enumerable: false,
+      writable: true,
+      value: reason,
+    });
+  } catch {
+    signal.__magiAbortReason = reason;
+  }
 }

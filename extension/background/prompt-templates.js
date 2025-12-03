@@ -614,7 +614,7 @@ export function formatResponses(responses) {
     .map(([name, text]) => {
       const trimmed = (text || "").trim();
       return `【${name}】
-${trimmed.slice(0, 800)}${trimmed.length > 800 ? "..." : ""}`;
+${trimmed}`;
     })
     .join("\n\n");
 }

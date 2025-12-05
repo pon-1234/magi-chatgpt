@@ -11,7 +11,14 @@ const COMPOSER_SELECTORS = [
   'textarea[placeholder*="Send a message"]',
   'textarea[placeholder*="メッセージ"]',
   'div[contenteditable="true"][aria-label*="メッセージ"]',
+  // フォールバック: 画面下部にあるcontenteditableな入力欄らしき要素
+  'main div[contenteditable="true"]:not([contenteditable="false"])',
 ];
+
+const ASSISTANT_MESSAGE_SELECTOR =
+  '[data-message-author-role^="assistant"],' +
+  '[data-message-author-role="model"],' +
+  '[data-testid="assistant-message"]';
 
 const CONTINUE_BUTTON_PATTERNS = [
   /continue\s+generating/i,
@@ -249,8 +256,8 @@ function findSendButton(element) {
 
 function collectAssistantIds() {
   return new Set(
-    Array.from(document.querySelectorAll('[data-message-author-role="assistant"]')).map(
-      (node, index) => getMessageId(node, index)
+    Array.from(document.querySelectorAll(ASSISTANT_MESSAGE_SELECTOR)).map((node, index) =>
+      getMessageId(node, index)
     )
   );
 }
@@ -352,9 +359,7 @@ async function waitForNewAssistantResponse(knownIds, { timeout = DEFAULT_RESPONS
         return;
       }
 
-      const nodes = Array.from(
-        document.querySelectorAll('[data-message-author-role="assistant"]')
-      );
+      const nodes = Array.from(document.querySelectorAll(ASSISTANT_MESSAGE_SELECTOR));
 
       for (let index = nodes.length - 1; index >= 0; index -= 1) {
         const node = nodes[index];
@@ -449,9 +454,6 @@ function detectBlockingIssues() {
   if (document.querySelector('button[data-testid="login-button"]')) {
     return "ChatGPTにログインしてください。";
   }
-  if (clickDeepResearchStopIfPresent()) {
-    return null;
-  }
   const bodyText = document.body?.innerText || "";
   for (const { pattern, message } of BLOCKING_TEXT_PATTERNS) {
     if (pattern.test(bodyText)) {
@@ -463,19 +465,6 @@ function detectBlockingIssues() {
 
 function delay(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function clickDeepResearchStopIfPresent() {
-  const buttons = Array.from(document.querySelectorAll("button"));
-  if (!buttons.length) return false;
-  const normalize = (btn) => btn.textContent?.trim() || "";
-  const stopButton = buttons.find((btn) => /停止する/.test(normalize(btn)));
-  const keepButton = buttons.find((btn) => /停止しない/.test(normalize(btn)));
-  if (stopButton && keepButton) {
-    stopButton.click();
-    return true;
-  }
-  return false;
 }
 
 function normalizeWhitespace(input) {

@@ -507,7 +507,7 @@ async function broadcastPrompt(template, agentList) {
   return results;
 }
 
-async function sendPromptToAgent(agent, prompt, maxRetry = 1) {
+async function sendPromptToAgent(agent, prompt, maxRetry = 0) {
   let lastError;
   const stopPeriodicActivation = startPeriodicActivation(agent, "応答待機");
   try {

@@ -66,10 +66,10 @@ export function isNoReceivingEndError(error) {
 export function isTransientError(error) {
   if (!error?.message) return false;
   const msg = error.message;
+  // ChatGPT内部タイムアウトは多くの場合リトライしても改善しないため除外
   return (
     isNoReceivingEndError(error) ||
-    msg.includes("The message port closed before a response was received") ||
-    msg.includes("ChatGPTの応答待ちがタイムアウトしました")
+    msg.includes("The message port closed before a response was received")
   );
 }
 

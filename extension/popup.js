@@ -28,7 +28,7 @@ let latestState = null;
 let latestSettings = null;
 let settingsSaving = false;
 const SETTINGS_LIMITS = {
-  responseTimeoutSeconds: { min: 60, max: 900 },
+  responseTimeoutSeconds: { min: 60, max: 1_200 },
   tabRefocusSeconds: { min: 10, max: 300 },
 };
 

@@ -10,7 +10,7 @@ const STATE_PERSIST_DEBOUNCE_MS = 250;
 const MAX_LOG_ENTRIES = 500;
 
 const DEFAULT_SETTINGS = Object.freeze({
-  responseTimeoutMs: 300_000,
+  responseTimeoutMs: 1_200_000,
   tabRefocusIntervalMs: 45_000,
 });
 
@@ -125,7 +125,12 @@ export async function updateSettings(partial = {}) {
 function sanitizeSettings(partial) {
   const sanitized = {};
   if ("responseTimeoutMs" in partial) {
-    sanitized.responseTimeoutMs = clampNumber(partial.responseTimeoutMs, 60_000, 900_000, DEFAULT_SETTINGS.responseTimeoutMs);
+    sanitized.responseTimeoutMs = clampNumber(
+      partial.responseTimeoutMs,
+      60_000,
+      1_200_000,
+      DEFAULT_SETTINGS.responseTimeoutMs
+    );
   }
   if ("tabRefocusIntervalMs" in partial) {
     sanitized.tabRefocusIntervalMs = clampNumber(
